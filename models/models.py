@@ -117,15 +117,20 @@ class LatentDiffusion(nn.Module):
 
     @torch.no_grad()
     def process_input(self, pixel_values, text_input):
-        # 1. Image -> Latent (scaled by VAE factor, usually 0.18215)
-        latents = self.vae.encode(pixel_values).latent_dist.sample()
-        latents = latents * 0.18215
+        # Ensure pixels match VAE dtype (fp16)
+        pixel_values = pixel_values.to(self.vae.dtype)
 
-        # 2. Text -> Embedding
-        # Assuming text_input is already tokenized or handled by text_encoder
+        # Image -> Latent
+        latents = self.vae.encode(pixel_values).latent_dist.sample()
+        latents = latents * 0.18215  # Consider making this a class attr
+
+        # Text -> Embedding
+        # Ensure text_input (tokens) are on the right device
         encoder_hidden_states = self.text_encoder(text_input)[0]
 
-        return latents, encoder_hidden_states
+        # CRITICAL: Cast them back to the Transformer's dtype (likely fp32)
+        # so the DiT blocks don't crash
+        return latents.float(), encoder_hidden_states.float()
 
     def forward(self, pixel_values, text_input):
         # This is what your Trainer calls every step
