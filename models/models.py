@@ -1,3 +1,4 @@
+import torch
 from einops import rearrange
 from torch import nn
 
@@ -102,23 +103,34 @@ class DiT(nn.Module):
 
 
 class LatentDiffusion(nn.Module):
-    def __init__(self, dit_model, vae, text_encoder, tokenizer, scheduler):
+    def __init__(self, dit_model, vae, text_encoder, engine):
         super().__init__()
-        self.transformer = dit_model  # Your DiT
-        self.vae = vae  # Frozen VAE
-        self.text_encoder = text_encoder  # Frozen CLIP/T5
-        self.scheduler = scheduler  # Noise schedule (DDPM/DDIM/Flow)
+        self.transformer = dit_model
+        self.vae = vae
+        self.text_encoder = text_encoder
+        self.engine = engine  # This replaces 'scheduler' for training logic
 
         # Freeze the giants
         self.vae.eval().requires_grad_(False)
         self.text_encoder.eval().requires_grad_(False)
 
-    def process_input(self, images, prompt):
-        # 1. Image -> Latent
-        # 2. Text -> Embedding
-        # 3. Add Noise to Latents
-        pass
+    @torch.no_grad()
+    def process_input(self, pixel_values, text_input):
+        # 1. Image -> Latent (scaled by VAE factor, usually 0.18215)
+        latents = self.vae.encode(pixel_values).latent_dist.sample()
+        latents = latents * 0.18215
 
-    def forward(self, x, t, cond):
-        # The actual training step
-        return self.transformer(x, t, cond)
+        # 2. Text -> Embedding
+        # Assuming text_input is already tokenized or handled by text_encoder
+        encoder_hidden_states = self.text_encoder(text_input)[0]
+
+        return latents, encoder_hidden_states
+
+    def forward(self, pixel_values, text_input):
+        # This is what your Trainer calls every step
+        latents, cond = self.process_input(pixel_values, text_input)
+
+        # The engine handles the noise math (DDPM or Flow)
+        # and returns the MSE loss
+        loss = self.engine.compute_loss(self.transformer, latents, cond)
+        return loss
