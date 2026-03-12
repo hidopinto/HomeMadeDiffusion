@@ -1,6 +1,6 @@
 import weave
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed3D
+from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
 from diffusion_engine import DiffusionEngine, DDPM
 from torch.optim import AdamW
 
@@ -13,8 +13,9 @@ def main():
     method = DDPM(learn_sigma=False)
     engine = DiffusionEngine(method=method)
 
-    # 3. Setup the DiT with your 3D Positional Strategy
-    pos_embedder = SinCosPosEmbed3D(hidden_size=1152, grid_size=32)
+    # 3. Setup 2D Positional Strategy
+    # Using 32 for a 256x256 image (8x VAE downscale)
+    pos_embedder = SinCosPosEmbed2D(hidden_size=1152, grid_size=32)
 
     model_core = DiT(
         input_size=32,
@@ -24,14 +25,14 @@ def main():
         depth=28,
         num_heads=16,
         pos_embedder=pos_embedder,
-        processor_class=None,  # e.g. Attention
-        conditioner_class=None  # e.g. AdaLNZeroStrategy
+        processor_class=Attention,  # Fixed from None
+        conditioner_class=AdaLNZeroStrategy  # Fixed from None
     )
 
     # Wrap in LatentDiffusion
     # Note: You'll need to pass your frozen VAE and Text Encoder here
     # TODO: load vae
-    # TODO: load rext-encoder
+    # TODO: load text-encoder
     model = LatentDiffusion(model_core, vae=None, text_encoder=None, engine=engine)
 
     # 4. Optimizer & Scheduler

@@ -35,7 +35,7 @@ class TimestepEmbedder(nn.Module):
         return self.mlp(t_freq)
 
 
-def get_2d_sincos_pos_embed(self, embed_dim, grid_size):
+def get_2d_sincos_pos_embed(embed_dim, grid_size):
     """Standard DiT positional embedding logic."""
     grid_h = np.arange(grid_size, dtype=np.float32)
     grid_w = np.arange(grid_size, dtype=np.float32)
@@ -44,12 +44,12 @@ def get_2d_sincos_pos_embed(self, embed_dim, grid_size):
 
     # Helper logic to create sin-cos waves based on coordinates
     half_dim = embed_dim // 2
-    emb_h = self._get_1d_sincos_pos_embed_from_grid(half_dim, grid[0])
-    emb_w = self._get_1d_sincos_pos_embed_from_grid(half_dim, grid[1])
+    emb_h = get_1d_sincos_pos_embed_from_grid(half_dim, grid[0])
+    emb_w = get_1d_sincos_pos_embed_from_grid(half_dim, grid[1])
     return torch.from_numpy(np.concatenate([emb_h, emb_w], axis=1)).float().unsqueeze(0)
 
 
-def _get_1d_sincos_pos_embed_from_grid(self, dim, grid):
+def get_1d_sincos_pos_embed_from_grid(dim, grid):
     freqs = np.exp(-np.log(10000) * np.arange(dim // 2) / (dim // 2))
     args = grid.flatten()[:, None] * freqs[None, :]
     return np.concatenate([np.cos(args), np.sin(args)], axis=-1)

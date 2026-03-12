@@ -38,9 +38,9 @@ class AdaLNZeroStrategy(nn.Module):
         nn.init.constant_(self.linear.weight, 0)
         nn.init.constant_(self.linear.bias, 0)
 
-    def forward(self, x, c):
+    def forward(self, x, condition):
         # Generate the 6 parameters
-        params = self.linear(self.silu(c)).chunk(6, dim=1)
+        params = self.linear(self.silu(condition)).chunk(6, dim=1)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = params
 
         # This is where 'modulate' lived. Now it's internal logic.
@@ -67,8 +67,8 @@ class FinalLayer(nn.Module):
         nn.init.constant_(self.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.adaLN_modulation[-1].bias, 0)
 
-    def forward(self, x, c):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+    def forward(self, x, condition):
+        shift, scale = self.adaLN_modulation(condition).chunk(2, dim=1)
         x = x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
         x = self.norm_final(x)
         x = self.linear(x)

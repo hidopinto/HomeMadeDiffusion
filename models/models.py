@@ -1,6 +1,7 @@
 import torch
 from einops import rearrange
 from torch import nn
+from timm.models.vision_transformer import Attention
 
 from layers import PatchEmbed, FinalLayer
 from models.conditioning import TimestepEmbedder
@@ -90,7 +91,7 @@ class DiT(nn.Module):
             x = block(x, condition)
 
         # 5. Final Projection & Unpatchify
-        x = self.final_layer(x, channels)
+        x = self.final_layer(x, condition)
 
         p = self.patch_size
         if is_video:
