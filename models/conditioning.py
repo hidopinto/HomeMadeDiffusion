@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from einops import repeat
+
 
 class TimestepEmbedder(nn.Module):
     """
@@ -31,3 +33,52 @@ class TimestepEmbedder(nn.Module):
     def forward(self, t):
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
         return self.mlp(t_freq)
+
+
+def get_2d_sincos_pos_embed(self, embed_dim, grid_size):
+    """Standard DiT positional embedding logic."""
+    grid_h = np.arange(grid_size, dtype=np.float32)
+    grid_w = np.arange(grid_size, dtype=np.float32)
+    grid = np.meshgrid(grid_w, grid_h)
+    grid = np.stack(grid, axis=0).reshape([2, 1, grid_size, grid_size])
+
+    # Helper logic to create sin-cos waves based on coordinates
+    half_dim = embed_dim // 2
+    emb_h = self._get_1d_sincos_pos_embed_from_grid(half_dim, grid[0])
+    emb_w = self._get_1d_sincos_pos_embed_from_grid(half_dim, grid[1])
+    return torch.from_numpy(np.concatenate([emb_h, emb_w], axis=1)).float().unsqueeze(0)
+
+
+def _get_1d_sincos_pos_embed_from_grid(self, dim, grid):
+    freqs = np.exp(-np.log(10000) * np.arange(dim // 2) / (dim // 2))
+    args = grid.flatten()[:, None] * freqs[None, :]
+    return np.concatenate([np.cos(args), np.sin(args)], axis=-1)
+
+
+class SinCosPosEmbed2D(nn.Module):
+    def __init__(self, hidden_size, grid_size):
+        super().__init__()
+        # Logic from previous response moved here
+        pos_embed = get_2d_sincos_pos_embed(hidden_size, grid_size)
+        self.register_buffer("pos_embed", pos_embed)
+
+    def forward(self, x):
+        # x is (B, N, D)
+        return self.pos_embed
+
+
+class SinCosPosEmbed3D(nn.Module):
+    def __init__(self, hidden_size, grid_size):
+        super().__init__()
+        self.grid_size = grid_size
+        pos_embed = get_2d_sincos_pos_embed(hidden_size, grid_size)
+        self.register_buffer("pos_embed", pos_embed)
+
+    def forward(self, x):
+        # x is (B, N, D) where N = F * H * W
+        # We assume f can be dynamic
+        num_spatial_patches = self.grid_size ** 2
+        f = x.shape[1] // num_spatial_patches
+
+        # Use repeat to stretch spatial info across the temporal axis
+        return repeat(self.pos_embed, '1 n d -> 1 (f n) d', f=f)

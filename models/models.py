@@ -1,8 +1,7 @@
 from einops import rearrange
 from torch import nn
-import torch.nn.functional as F
 
-from layers import Attention, Mlp, PatchEmbed, FinalLayer, AdaLNZeroStrategy
+from layers import PatchEmbed, FinalLayer, AdaLNZeroStrategy
 from models.conditioning import TimestepEmbedder
 
 
@@ -24,80 +23,70 @@ class DiTBlock(nn.Module):
 
 
 class DiT(nn.Module):
-    def __init__(self, input_size, patch_size, in_channels, hidden_size, depth, num_heads):
+    def __init__(self, input_size, patch_size, in_channels, hidden_size, depth, num_heads, pos_embedder):
         super().__init__()
         self.in_channels = in_channels
-        self.out_channels = in_channels
         self.patch_size = patch_size
         self.hidden_size = hidden_size
+        self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
 
+        # 1. Embedders
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
+        self.pos_embedder = pos_embedder  # <--- New Strategy Class
         self.t_embedder = TimestepEmbedder(hidden_size)
+        self.y_embedder = nn.Linear(hidden_size, hidden_size)
 
-        # In a real scenario, y might be class labels (nn.Embedding) or
-        # text features (already projected to hidden_size).
-        # We'll assume y is already an embedding of 'hidden_size' or None.
-
+        # 2. Transformer Blocks (Stays the same)
         self.blocks = nn.ModuleList([
             DiTBlock(
                 hidden_size=hidden_size,
-                # Processor: Standard Attention (can be swapped for 3D/Temporal later)
                 processor=Attention(hidden_size, num_heads=num_heads, qkv_bias=True),
-                # Conditioner: Our modular AdaLNZero strategy
                 conditioner=AdaLNZeroStrategy(hidden_size, hidden_size)
             ) for _ in range(depth)
         ])
 
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels)
 
     def forward(self, x, t, y=None):
         """
         x: (B, C, H, W) or (B, C, F, H, W)
         t: (B,) timesteps
-        y: (B, D) optional conditioning
+        y: (B, D) condition (already projected or class-embedded)
         """
         is_video = x.dim() == 5
-        if is_video:
-            original_f = x.shape[2]
-            original_h = x.shape[3]
-            original_w = x.shape[4]
-        else:
-            original_h = x.shape[2]
-            original_w = x.shape[3]
+        b, c = x.shape[0], x.shape[1]
 
-        # 1. Patchify
-        # x goes from (B, C, H, W) -> (B, N, D)
+        if is_video:
+            f, h, w = x.shape[2:]
+        else:
+            h, w = x.shape[2:]
+
+        # 1. Patchify & Position
         x = self.patch_embed(x)
 
-        # 2. Add Positional Embeddings (Not implemented here, but necessary!)
-        x = x + self.pos_embed
+        # 2. Add Positional Embeddings via Strategy
+        # The embedder now handles the logic of 2D vs 3D repeat/interpolation
+        x = x + self.pos_embedder(x)
 
-        # 3. Create conditioning vector 'c'
-        # DiT combines timestep and class information by summing them
+        # 3. Conditioning
         c = self.t_embedder(t)
         if y is not None:
-            c = c + y
+            c = c + self.y_embedder(y)
 
-        # 4. Transformer blocks
+        # 4. Blocks
         for block in self.blocks:
             x = block(x, c)
 
-        # 5. Unpatchify
-        x = self.final_layer(x, c)  # (B, N, patch_size**2 * out_channels)
+        # 5. Final Projection & Unpatchify
+        x = self.final_layer(x, c)
 
-        # Inside DiT.forward()
-        x = self.final_layer(x, c)  # Result: (B, N, patch_size**2 * out_channels)
-
-        # To compare this to your original pixels/latents, you must do:
+        p = self.patch_size
         if is_video:
-            # (B, (F*H*W), C*P*P) -> (B, C, F, H*P, W*P)
             x = rearrange(x, 'b (f h w) (c p1 p2) -> b c f (h p1) (w p2)',
-                          p1=self.patch_size, p2=self.patch_size, f=original_f, h=original_h, w=original_w)
+                          p1=p, p2=p, f=f, h=h // p, w=w // p)
         else:
-            # (B, (H*W), C*P*P) -> (B, C, H*P, W*P)
             x = rearrange(x, 'b (h w) (c p1 p2) -> b c (h p1) (w p2)',
-                          p1=self.patch_size, p2=self.patch_size, h=original_h, w=original_w)
-
+                          p1=p, p2=p, h=h // p, w=w // p)
         return x
 
 

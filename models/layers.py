@@ -1,6 +1,5 @@
 from torch import nn
-from timm.models.vision_transformer import Attention, Mlp # Don't reinvent the wheel for standard ViT parts
-from einops import rearrange, repeat  # Essential for "patchifying" and video tensor reshapes
+from einops import rearrange  # Essential for "patchifying" and video tensor reshapes
 
 
 class PatchEmbed(nn.Module):
