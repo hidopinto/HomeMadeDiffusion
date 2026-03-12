@@ -13,9 +13,9 @@ class DiTBlock(nn.Module):
         self.processor = processor  # e.g., SelfAttention or CrossAttention
         self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False)
 
-    def forward(self, x, c):
+    def forward(self, x, condition):
         # 1. Ask the conditioner to prepare the inputs
-        x_msa, gate_msa, x_mlp, gate_mlp = self.conditioner(self.norm(x), c)
+        x_msa, gate_msa, x_mlp, gate_mlp = self.conditioner(self.norm(x), condition)
 
         # 2. Apply Attention and MLP with their respective gates
         x = x + gate_msa.unsqueeze(1) * self.processor(x_msa)
@@ -66,12 +66,12 @@ class DiT(nn.Module):
         y: (B, D) condition (already projected or class-embedded)
         """
         is_video = x.dim() == 5
-        b, c = x.shape[0], x.shape[1]
+        batch, channels = x.shape[0], x.shape[1]
 
         if is_video:
-            f, h, w = x.shape[2:]
+            frames, height, width = x.shape[2:]
         else:
-            h, w = x.shape[2:]
+            height, width = x.shape[2:]
 
         # 1. Patchify & Position
         x = self.patch_embed(x)
@@ -81,24 +81,24 @@ class DiT(nn.Module):
         x = x + self.pos_embedder(x)
 
         # 3. Conditioning
-        c = self.t_embedder(t)
+        condition = self.t_embedder(t)
         if y is not None:
-            c = c + self.y_embedder(y)
+            condition = condition + self.y_embedder(y)
 
         # 4. Blocks
         for block in self.blocks:
-            x = block(x, c)
+            x = block(x, condition)
 
         # 5. Final Projection & Unpatchify
-        x = self.final_layer(x, c)
+        x = self.final_layer(x, channels)
 
         p = self.patch_size
         if is_video:
             x = rearrange(x, 'b (f h w) (c p1 p2) -> b c f (h p1) (w p2)',
-                          p1=p, p2=p, f=f, h=h // p, w=w // p)
+                          p1=p, p2=p, f=frames, h=height // p, w=width // p)
         else:
             x = rearrange(x, 'b (h w) (c p1 p2) -> b c (h p1) (w p2)',
-                          p1=p, p2=p, h=h // p, w=w // p)
+                          p1=p, p2=p, h=height // p, w=width // p)
         return x
 
 
