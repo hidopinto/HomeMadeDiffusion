@@ -1,0 +1,95 @@
+import torch
+from torch import nn
+import torch.nn.functional as F
+
+
+class DDPM(nn.Module):
+    def __init__(self, num_timesteps=1000, learn_sigma=True, beta_start=0.0001, beta_end=0.02):
+        super().__init__()
+        self.num_timesteps = num_timesteps
+        self.learn_sigma = learn_sigma
+
+        # Precompute the linear beta schedule
+        betas = torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float64)
+        alphas = 1.0 - betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0)
+        alphas_cumprod_prev = torch.cat([torch.tensor([1.0]), alphas_cumprod[:-1]])
+
+        # register_buffer ensures these move to your GPU (RTX 3090) but aren't trained
+        self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod).float())
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - alphas_cumprod).float())
+
+        # Calculations for the "True" Posterior q(x_{t-1} | x_t, x_0)
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        self.register_buffer('posterior_variance', posterior_variance.float())
+        self.register_buffer('posterior_log_variance_clipped',
+                             torch.log(torch.cat([posterior_variance[1:2], posterior_variance[1:]])).float())
+
+        self.register_buffer('posterior_mean_coef1',
+                             (betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod)).float())
+        self.register_buffer('posterior_mean_coef2',
+                             ((1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod)).float())
+
+    def sample_timesteps(self, batch_size, device):
+        return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
+
+    def q_sample(self, x_0, t, noise):
+        """Standard Forward Process: x_t = sqrt(alpha_bar)*x_0 + sqrt(1-alpha_bar)*noise"""
+        # Shapes: (B, 1, 1, 1) to broadcast across (B, C, H, W)
+        sqrt_alpha_bar = self.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1)
+        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
+        return sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
+
+    def calc_vlb_loss(self, x_0, x_t, t, eps_pred, var_v):
+        """The 'Divergence Sum' (KL Divergence) between true and predicted distributions."""
+        # 1. Get True Distribution (q) parameters
+        true_mean = self.posterior_mean_coef1[t].view(-1, 1, 1, 1) * x_0 + \
+                    self.posterior_mean_coef2[t].view(-1, 1, 1, 1) * x_t
+        true_log_var = self.posterior_log_variance_clipped[t].view(-1, 1, 1, 1)
+
+        # 2. Get Predicted Distribution (p) parameters
+        # Learned Sigma: var_v interpolates between min and max variance
+        min_log_var = self.posterior_log_variance_clipped[t].view(-1, 1, 1, 1)
+        max_log_var = torch.log(torch.linspace(0.0001, 0.02, self.num_timesteps).to(x_t.device))[t].view(-1, 1, 1, 1)
+        model_log_var = var_v * max_log_var + (1 - var_v) * min_log_var
+
+        # Use predicted noise to estimate x_0 for the mean calculation
+        alpha_bar = (self.sqrt_alphas_cumprod[t] ** 2).view(-1, 1, 1, 1)
+        pred_x_0 = (x_t - torch.sqrt(1 - alpha_bar) * eps_pred) / torch.sqrt(alpha_bar)
+
+        model_mean = self.posterior_mean_coef1[t].view(-1, 1, 1, 1) * pred_x_0 + \
+                     self.posterior_mean_coef2[t].view(-1, 1, 1, 1) * x_t
+
+        # 3. KL Divergence for two Gaussians
+        kl = 0.5 * (-1.0 + true_log_var - model_log_var + torch.exp(model_log_var - true_log_var) +
+                    (true_mean - model_mean) ** 2 * torch.exp(-true_log_var))
+        return kl.flatten(1).mean(1).mean()
+
+    def loss(self, model, x_0, x_t, t, model_output, noise):
+        """Combines MSE and VLB if learn_sigma is enabled."""
+        if not self.learn_sigma:
+            return F.mse_loss(model_output, noise)
+
+        eps_pred, var_v = torch.split(model_output, x_0.shape[1], dim=1)
+        loss_mse = F.mse_loss(eps_pred, noise)
+
+        # Improved DDPM: Stop gradients for noise prediction during VLB calculation
+        loss_vlb = self.calc_vlb_loss(x_0, x_t, t, eps_pred.detach(), var_v)
+        return loss_mse + 0.001 * loss_vlb
+
+
+class DiffusionEngine(nn.Module):
+    def __init__(self, method):
+        super().__init__()
+        self.method = method  # This is now an object (e.g., DDPM())
+
+    def compute_loss(self, model, x_0, cond):
+        # The engine doesn't know HOW to sample or HOW to calc loss.
+        # It just manages the execution.
+        t = self.method.sample_timesteps(x_0.shape[0], x_0.device)
+        noise = torch.randn_like(x_0)
+
+        x_t = self.method.q_sample(x_0, t, noise)
+        model_output = model(x_t, t, cond)
+
+        return self.method.loss(model, x_0, x_t, t, model_output, noise)
