@@ -63,8 +63,9 @@ class SinCosPosEmbed2D(nn.Module):
         self.register_buffer("pos_embed", pos_embed)
 
     def forward(self, x):
-        # x is (B, N, D)
-        return self.pos_embed
+        # x shape: (B, N, D)
+        # Explicitly expand to match batch size for stability
+        return self.pos_embed.expand(x.shape[0], -1, -1)
 
 
 class SinCosPosEmbed3D(nn.Module):

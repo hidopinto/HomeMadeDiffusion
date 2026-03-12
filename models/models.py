@@ -1,3 +1,5 @@
+__all__ = ['DiT', 'LatentDiffusion', 'Attention']
+
 import torch
 from einops import rearrange
 from torch import nn
@@ -115,22 +117,21 @@ class LatentDiffusion(nn.Module):
         self.vae.eval().requires_grad_(False)
         self.text_encoder.eval().requires_grad_(False)
 
+    # models.py - LatentDiffusion.process_input
     @torch.no_grad()
     def process_input(self, pixel_values, text_input):
-        # Ensure pixels match VAE dtype (fp16)
+        # Ensure inputs match the frozen giants' dtype
         pixel_values = pixel_values.to(self.vae.dtype)
 
-        # Image -> Latent
+        # VAE Encoding
         latents = self.vae.encode(pixel_values).latent_dist.sample()
-        latents = latents * 0.18215  # Consider making this a class attr
+        latents = latents * 0.18215
 
-        # Text -> Embedding
-        # Ensure text_input (tokens) are on the right device
+        # CLIP Encoding (assuming text_input is already tokenized)
         encoder_hidden_states = self.text_encoder(text_input)[0]
 
-        # CRITICAL: Cast them back to the Transformer's dtype (likely fp32)
-        # so the DiT blocks don't crash
-        return latents.float(), encoder_hidden_states.float()
+        # CRITICAL: Convert back to float32 for the Transformer core
+        return latents.to(torch.float32), encoder_hidden_states.to(torch.float32)
 
     def forward(self, pixel_values, text_input):
         # This is what your Trainer calls every step
