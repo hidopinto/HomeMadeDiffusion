@@ -23,10 +23,21 @@ class DiTBlock(nn.Module):
 
 
 class DiT(nn.Module):
-    def __init__(self, input_size, patch_size, in_channels, hidden_size, depth, num_heads, pos_embedder):
+    def __init__(
+            self,
+            input_size,
+            patch_size,
+            in_channels,
+            hidden_size,
+            depth,
+            num_heads,
+            pos_embedder,
+            processor_class,  # e.g., Attention from timm
+            conditioner_class  # e.g., AdaLNZeroStrategy
+    ):
         super().__init__()
-        self.in_channels = in_channels
         self.patch_size = patch_size
+        self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
 
@@ -40,8 +51,8 @@ class DiT(nn.Module):
         self.blocks = nn.ModuleList([
             DiTBlock(
                 hidden_size=hidden_size,
-                processor=Attention(hidden_size, num_heads=num_heads, qkv_bias=True),
-                conditioner=AdaLNZeroStrategy(hidden_size, hidden_size)
+                processor=processor_class(hidden_size, num_heads=num_heads, qkv_bias=True),
+                conditioner=conditioner_class(hidden_size, hidden_size)
             ) for _ in range(depth)
         ])
 
