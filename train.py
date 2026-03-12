@@ -1,13 +1,31 @@
+import torch
 import weave
+from diffusers import AutoencoderKL
+from transformers import CLIPTextModel, CLIPTokenizer
+from torch.optim import AdamW
+
 from trainer import DiTTrainer
 from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
 from diffusion_engine import DiffusionEngine, DDPM
-from torch.optim import AdamW
+
+
+def load_frozen_models(device):
+    # SDXL VAE is generally preferred for its improved latent space
+    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+
+    # CLIP Text Encoder (Standard for most DiT/Stable Diffusion research)
+    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
+
+    return vae.to(device), text_encoder.to(device), tokenizer
 
 
 def main():
-    # 1. Start Weave tracking
     weave.init("video-diffusion-research")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 1. Load Frozen Giants
+    vae, text_encoder, tokenizer = load_frozen_models(device)
 
     # 2. Setup the "Math"
     method = DDPM(learn_sigma=False)
@@ -30,10 +48,7 @@ def main():
     )
 
     # Wrap in LatentDiffusion
-    # Note: You'll need to pass your frozen VAE and Text Encoder here
-    # TODO: load vae
-    # TODO: load text-encoder
-    model = LatentDiffusion(model_core, vae=None, text_encoder=None, engine=engine)
+    model = LatentDiffusion(model_core, vae=vae, text_encoder=text_encoder, engine=engine)
 
     # 4. Optimizer & Scheduler
     optimizer = AdamW(model.transformer.parameters(), lr=1e-4, weight_decay=0)
