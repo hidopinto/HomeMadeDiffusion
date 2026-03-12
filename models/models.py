@@ -130,19 +130,20 @@ class LatentDiffusion(nn.Module):
 
         # VAE Encoding
         latents = self.vae.encode(pixel_values).latent_dist.sample()
-        latents = latents * 0.18215
+        latents = latents * 0.13025
 
         # CLIP Encoding (assuming text_input is already tokenized)
         encoder_hidden_states = self.text_encoder(text_input)[0]
 
+        pooled_cond = encoder_hidden_states.mean(dim=1)
+
         # CRITICAL: Convert back to float32 for the Transformer core
-        return latents.to(torch.float32), encoder_hidden_states.to(torch.float32)
+        return latents.to(torch.float32), pooled_cond.to(torch.float32)
 
     def forward(self, pixel_values, text_input):
         # This is what your Trainer calls every step
         latents, cond = self.process_input(pixel_values, text_input)
 
         # The engine handles the noise math (DDPM or Flow)
-        # and returns the MSE loss
         loss = self.engine.compute_loss(self.transformer, latents, cond)
         return loss
