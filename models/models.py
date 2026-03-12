@@ -15,6 +15,11 @@ class DiTBlock(nn.Module):
         self.conditioner = conditioner  # e.g., AdaLNZeroStrategy
         self.processor = processor  # e.g., SelfAttention or CrossAttention
         self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_size, 4 * hidden_size),
+            nn.SiLU(),
+            nn.Linear(4 * hidden_size, hidden_size)
+        )
 
     def forward(self, x, condition):
         # 1. Ask the conditioner to prepare the inputs
