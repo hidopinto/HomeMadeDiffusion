@@ -2,7 +2,7 @@ import torch
 from einops import rearrange
 from torch import nn
 
-from layers import PatchEmbed, FinalLayer, AdaLNZeroStrategy
+from layers import PatchEmbed, FinalLayer
 from models.conditioning import TimestepEmbedder
 
 
