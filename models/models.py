@@ -72,7 +72,7 @@ class DiT(nn.Module):
             ) for _ in range(depth)
         ])
 
-        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels, learn_variance=self.learn_variance)
+        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels, learn_variance=learn_variance)
 
     def forward(self, x, t, y=None):
         """
@@ -101,12 +101,14 @@ class DiT(nn.Module):
         for block in self.blocks:
             x = block(x, condition)
 
-        # 4. Final Projection & Unpatchify
+        # 4. Final Projection
         x = self.final_layer(x, condition)
-        v = 2 if self.learn_variance else 1
-        c = self.in_channels
 
+        # 5. Unpatchify for Mean + Variance
         p = self.patch_size
+        c = self.in_channels
+        v = 2 if self.learn_variance else 1
+
         if is_video:
             # Resulting shape: (B, v*C, F, H, W)
             # The engine will split this into (B, C, F, H, W) for epsilon and variance

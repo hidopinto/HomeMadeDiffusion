@@ -24,7 +24,20 @@ def main():
     weave.init("video-diffusion-research")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Model conf
     learn_variance=False
+    input_size = 32
+    patch_size = 2
+    grid_size = input_size // patch_size
+    hidden_size = 1152
+    in_channels = 4
+    depth = 28
+    num_heads = 16
+    # Optimizer conf
+    lr = 1e-4
+    weight_decay = 0
+    # Training conf
+    epochs = 100
 
     # 1. Load Frozen Giants
     vae, text_encoder, tokenizer = load_frozen_models(device)
@@ -35,15 +48,15 @@ def main():
 
     # 3. Setup 2D Positional Strategy
     # Using 32 for a 256x256 image (8x VAE downscale)
-    pos_embedder = SinCosPosEmbed2D(hidden_size=1152, grid_size=16)
+    pos_embedder = SinCosPosEmbed2D(hidden_size=hidden_size, grid_size=grid_size)
 
     model_core = DiT(
-        input_size=32,
-        patch_size=2,
-        in_channels=4,
-        hidden_size=1152,
-        depth=28,
-        num_heads=16,
+        input_size=input_size,
+        patch_size=patch_size,
+        in_channels=in_channels,
+        hidden_size=hidden_size,
+        depth=depth,
+        num_heads=num_heads,
         pos_embedder=pos_embedder,
         processor_class=Attention,  # Fixed from None
         conditioner_class=AdaLNZeroStrategy,  # Fixed from None
@@ -55,12 +68,12 @@ def main():
     model = LatentDiffusion(model_core, vae=vae, text_encoder=text_encoder, engine=engine)
 
     # 4. Optimizer & Scheduler
-    optimizer = AdamW(model.transformer.parameters(), lr=1e-4, weight_decay=0)
+    optimizer = AdamW(model.transformer.parameters(), lr=lr, weight_decay=weight_decay)
 
     # 5. Execute
     # TODO: add dataloader
     trainer = DiTTrainer(model, dataloader=None, optimizer=optimizer, lr_scheduler=None)
-    trainer.fit(epochs=100)
+    trainer.fit(epochs=epochs)
 
 
 if __name__ == "__main__":
