@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from einops import repeat
 
 
 class TimestepEmbedder(nn.Module):
@@ -68,26 +67,25 @@ class SinCosPosEmbed2D(nn.Module):
         return self.pos_embed.expand(x.shape[0], -1, -1)
 
 
-# conditioning.py - Update SinCosPosEmbed3D
 class SinCosPosEmbed3D(nn.Module):
     def __init__(self, hidden_size, grid_size, max_frames=512):
+        # TODO: receive max_frame from conf
         super().__init__()
         self.grid_size = grid_size
         # Spatial 2D
         self.register_buffer("pos_embed_spatial", get_2d_sincos_pos_embed(hidden_size, grid_size))
         # Temporal 1D
-        self.register_buffer("pos_embed_temporal",
-                             get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
+        self.register_buffer("pos_embed_temporal", get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
 
     def forward(self, x):
-        num_spatial_patches = self.grid_size ** 2
-        f = x.shape[1] // num_spatial_patches
+        num_spatial_patches = self.pos_embed_spatial.shape[1]
+        num_temporal_patches = x.shape[1] // num_spatial_patches
 
         # spatial: [1, HW, D] -> [1, 1, HW, D]
         spatial = self.pos_embed_spatial.unsqueeze(1)
 
         # temporal: [F, D] -> [1, F, 1, D]
-        temporal = self.pos_embed_temporal[:f, :].unsqueeze(0).unsqueeze(2)
+        temporal = self.pos_embed_temporal[:num_temporal_patches, :].unsqueeze(0).unsqueeze(2)
 
         # Resulting broadcasted shape: [1, F, HW, D]
         combined = spatial + temporal

@@ -18,11 +18,11 @@ def load_config(config_path="config.yaml"):
 
 def load_frozen_models(config, device):
     # SDXL VAE is generally preferred for its improved latent space
-    vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
 
     # CLIP Text Encoder (Standard for most DiT/Stable Diffusion research)
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.float16)
+    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
 
     return vae.to(device), text_encoder.to(device), tokenizer
 

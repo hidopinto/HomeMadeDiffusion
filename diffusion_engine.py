@@ -5,6 +5,7 @@ import torch.nn.functional as F
 
 class DDPM(nn.Module):
     def __init__(self, num_timesteps=1000, learn_variance=True, beta_start=0.0001, beta_end=0.02):
+        # TODO: pass these params to conf
         super().__init__()
         self.num_timesteps = num_timesteps
         self.variance = learn_variance
@@ -13,11 +14,13 @@ class DDPM(nn.Module):
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.cat([torch.tensor([1.0]), alphas_cumprod[:-1]])
+        one_minus_alphas_cumprod = 1.0 - alphas_cumprod
+        one_minus_alphas_cumprod_safe = torch.clamp(one_minus_alphas_cumprod, min=1e-12)
 
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod).float())
-        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - alphas_cumprod).float())
+        self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(one_minus_alphas_cumprod).float())
 
-        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        posterior_variance = betas * (1.0 - alphas_cumprod_prev) / one_minus_alphas_cumprod_safe
         self.register_buffer('posterior_log_variance_clipped',
                              torch.log(torch.cat([posterior_variance[1:2], posterior_variance[1:]])).float())
 
@@ -25,9 +28,9 @@ class DDPM(nn.Module):
         self.register_buffer('log_betas', torch.log(torch.cat([posterior_variance[1:2], betas[1:]])).float())
 
         self.register_buffer('posterior_mean_coef1',
-                             (betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod)).float())
+                             (betas * torch.sqrt(alphas_cumprod_prev) / one_minus_alphas_cumprod_safe).float())
         self.register_buffer('posterior_mean_coef2',
-                             ((1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / (1.0 - alphas_cumprod)).float())
+                             ((1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / one_minus_alphas_cumprod_safe).float())
 
     def sample_timesteps(self, batch_size, device):
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)

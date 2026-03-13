@@ -112,19 +112,23 @@ class DiT(nn.Module):
         x = self.final_layer(x, condition)
 
         # 5. Unpatchify for Mean + Variance
-        p = self.patch_size
-        c = self.in_channels
         v = 2 if self.learn_variance else 1
+        c = self.in_channels
 
         if self.is_video:
-            # Resulting shape: (B, v*C, F, H, W)
-            # The engine will split this into (B, C, F, H, W) for epsilon and variance
-            x = rearrange(x, 'b (f h w) (v c p1 p2) -> b (v c) f (h p1) (w p2)',
-                          v=v, c=c, p1=p, p2=p, f=frames, h=height // p, w=width // p)
+            p_t, p_h, p_w = self.patch_size  #
+            # Calculate grid sizes based on the input latent dimensions
+            f_patches, h_patches, w_patches = frames // p_t, height // p_h, width // p_w
+
+            x = rearrange(x, 'b (f h w) (v c pt ph pw) -> b (v c) (f pt) (h ph) (w pw)',
+                          v=v, c=c, pt=p_t, ph=p_h, pw=p_w, f=f_patches, h=h_patches, w=w_patches)
         else:
-            # Resulting shape: (B, v*C, H, W)
-            x = rearrange(x, 'b (h w) (v c p1 p2) -> b (v c) (h p1) (w p2)',
-                          v=v, c=c, p1=p, p2=p, h=height // p, w=width // p)
+            p_h, p_w = self.patch_size  #
+            h_patches, w_patches = height // p_h, width // p_w
+
+            x = rearrange(x, 'b (h w) (v c ph pw) -> b (v c) (h ph) (w pw)',
+                          v=v, c=c, ph=p_h, pw=p_w, h=h_patches, w=w_patches)
+
         return x
 
 
