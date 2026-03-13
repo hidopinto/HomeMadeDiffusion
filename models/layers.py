@@ -50,6 +50,7 @@ class FinalLayer(nn.Module):
     def __init__(self, hidden_size, patch_size, out_channels, learn_variance=True):
         super().__init__()
         self.learn_sigma = learn_variance
+        self.patch_size = patch_size if isinstance(patch_size, (list, tuple)) else (patch_size, patch_size)
         # If learning sigma, we need 2x the channels (mean + variance)
         self.output_dim = out_channels * 2 if learn_variance else out_channels
 

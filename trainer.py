@@ -33,7 +33,8 @@ class DiTTrainer:
             loss = self.model(pixels, text_input)
             self.accelerator.backward(loss)
             self.optimizer.step()
-            self.lr_scheduler.step()
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
         return loss
 
     def fit(self, epochs):

@@ -72,21 +72,26 @@ class SinCosPosEmbed3D(nn.Module):
         # TODO: receive max_frame from conf
         super().__init__()
         self.grid_size = grid_size
+        self.hidden_size = hidden_size
+
         # Spatial 2D
         self.register_buffer("pos_embed_spatial", get_2d_sincos_pos_embed(hidden_size, grid_size))
         # Temporal 1D
         self.register_buffer("pos_embed_temporal", get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
 
     def forward(self, x):
+        # x shape: [B, N, D]
+        batch_size = x.shape[0]
         num_spatial_patches = self.pos_embed_spatial.shape[1]
         num_temporal_patches = x.shape[1] // num_spatial_patches
 
-        # spatial: [1, HW, D] -> [1, 1, HW, D]
+        # spatial: [1, 1, HW, D]
         spatial = self.pos_embed_spatial.unsqueeze(1)
+        # temporal: [1, F, 1, D]
+        temporal = self.pos_embed_temporal[:num_temporal_patches, :].view(1, num_temporal_patches, 1, self.hidden_size)
 
-        # temporal: [F, D] -> [1, F, 1, D]
-        temporal = self.pos_embed_temporal[:num_temporal_patches, :].unsqueeze(0).unsqueeze(2)
+        # Resulting broadcasted shape: [1, F, HW, D] -> [1, F*HW, D]
+        combined = (spatial + temporal).view(1, -1, self.hidden_size)
 
-        # Resulting broadcasted shape: [1, F, HW, D]
-        combined = spatial + temporal
-        return combined.view(1, -1, x.shape[-1])
+        # FIX: Expand to match batch size for stability in training
+        return combined.expand(batch_size, -1, -1)

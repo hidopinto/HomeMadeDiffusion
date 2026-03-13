@@ -162,7 +162,7 @@ class LatentDiffusion(nn.Module):
         pooled_cond = encoder_hidden_states.mean(dim=1)
 
         # CRITICAL: Convert back to float32 for the Transformer core
-        return latents.to(torch.float32), pooled_cond.to(torch.float32)
+        return latents, pooled_cond
 
     def forward(self, pixel_values, text_input):
         # This is what your Trainer calls every step
