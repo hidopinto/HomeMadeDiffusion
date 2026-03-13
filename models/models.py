@@ -9,6 +9,9 @@ from layers import PatchEmbed, FinalLayer
 from models.conditioning import TimestepEmbedder
 
 
+CLIP_LARGE_DIM = 768
+
+
 class DiTBlock(nn.Module):
     def __init__(self, hidden_size, processor, conditioner):
         super().__init__()
@@ -42,19 +45,23 @@ class DiT(nn.Module):
             num_heads,
             pos_embedder,
             processor_class,  # e.g., Attention from timm
-            conditioner_class  # e.g., AdaLNZeroStrategy
+            conditioner_class,  # e.g., AdaLNZeroStrategy
+            learn_variance,
+            cond_dim=CLIP_LARGE_DIM
     ):
         super().__init__()
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
+        self.cond_dim = cond_dim
         self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
+        self.learn_variance = learn_variance
 
         # 1. Embedders
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
         self.pos_embedder = pos_embedder  # <--- New Strategy Class
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.y_embedder = nn.Linear(hidden_size, hidden_size)
+        self.y_embedder = nn.Linear(cond_dim, hidden_size)
 
         # 2. Transformer Blocks (Stays the same)
         self.blocks = nn.ModuleList([
@@ -65,7 +72,7 @@ class DiT(nn.Module):
             ) for _ in range(depth)
         ])
 
-        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels)
+        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels, learn_variance=self.learn_variance)
 
     def forward(self, x, t, y=None):
         """
@@ -83,30 +90,32 @@ class DiT(nn.Module):
 
         # 1. Patchify & Position
         x = self.patch_embed(x)
-
-        # 2. Add Positional Embeddings via Strategy
-        # The embedder now handles the logic of 2D vs 3D repeat/interpolation
         x = x + self.pos_embedder(x)
 
-        # 3. Conditioning
+        # 2. Conditioning
         condition = self.t_embedder(t)
         if y is not None:
             condition = condition + self.y_embedder(y)
 
-        # 4. Blocks
+        # 3. Blocks
         for block in self.blocks:
             x = block(x, condition)
 
-        # 5. Final Projection & Unpatchify
+        # 4. Final Projection & Unpatchify
         x = self.final_layer(x, condition)
+        v = 2 if self.learn_variance else 1
+        c = self.in_channels
 
         p = self.patch_size
         if is_video:
-            x = rearrange(x, 'b (f h w) (c p1 p2) -> b c f (h p1) (w p2)',
-                          p1=p, p2=p, f=frames, h=height // p, w=width // p)
+            # Resulting shape: (B, v*C, F, H, W)
+            # The engine will split this into (B, C, F, H, W) for epsilon and variance
+            x = rearrange(x, 'b (f h w) (v c p1 p2) -> b (v c) f (h p1) (w p2)',
+                          v=v, c=c, p1=p, p2=p, f=frames, h=height // p, w=width // p)
         else:
-            x = rearrange(x, 'b (h w) (c p1 p2) -> b c (h p1) (w p2)',
-                          p1=p, p2=p, h=height // p, w=width // p)
+            # Resulting shape: (B, v*C, H, W)
+            x = rearrange(x, 'b (h w) (v c p1 p2) -> b (v c) (h p1) (w p2)',
+                          v=v, c=c, p1=p, p2=p, h=height // p, w=width // p)
         return x
 
 

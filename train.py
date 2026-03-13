@@ -5,7 +5,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
+from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, CLIP_LARGE_DIM
 from diffusion_engine import DiffusionEngine, DDPM
 
 
@@ -24,16 +24,18 @@ def main():
     weave.init("video-diffusion-research")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    learn_variance=False
+
     # 1. Load Frozen Giants
     vae, text_encoder, tokenizer = load_frozen_models(device)
 
     # 2. Setup the "Math"
-    method = DDPM(learn_sigma=False)
+    method = DDPM(learn_variance=learn_variance)
     engine = DiffusionEngine(method=method)
 
     # 3. Setup 2D Positional Strategy
     # Using 32 for a 256x256 image (8x VAE downscale)
-    pos_embedder = SinCosPosEmbed2D(hidden_size=1152, grid_size=32)
+    pos_embedder = SinCosPosEmbed2D(hidden_size=1152, grid_size=16)
 
     model_core = DiT(
         input_size=32,
@@ -44,7 +46,9 @@ def main():
         num_heads=16,
         pos_embedder=pos_embedder,
         processor_class=Attention,  # Fixed from None
-        conditioner_class=AdaLNZeroStrategy  # Fixed from None
+        conditioner_class=AdaLNZeroStrategy,  # Fixed from None
+        learn_variance=learn_variance,
+        cond_dim=CLIP_LARGE_DIM
     )
 
     # Wrap in LatentDiffusion

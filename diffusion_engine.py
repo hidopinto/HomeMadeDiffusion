@@ -4,10 +4,10 @@ import torch.nn.functional as F
 
 
 class DDPM(nn.Module):
-    def __init__(self, num_timesteps=1000, learn_sigma=True, beta_start=0.0001, beta_end=0.02):
+    def __init__(self, num_timesteps=1000, learn_variance=True, beta_start=0.0001, beta_end=0.02):
         super().__init__()
         self.num_timesteps = num_timesteps
-        self.learn_sigma = learn_sigma
+        self.learn_sigma = learn_variance
 
         # Precompute the linear beta schedule
         betas = torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float64)
