@@ -8,7 +8,7 @@ class TimestepEmbedder(nn.Module):
     """
     Embeds scalar timesteps into vector representations.
     """
-    def __init__(self, hidden_size, frequency_embedding_size=256):
+    def __init__(self, hidden_size, frequency_embedding_size, max_period):
         super().__init__()
         self.mlp = nn.Sequential(
             nn.Linear(frequency_embedding_size, hidden_size, bias=True),
@@ -16,13 +16,13 @@ class TimestepEmbedder(nn.Module):
             nn.Linear(hidden_size, hidden_size, bias=True),
         )
         self.frequency_embedding_size = frequency_embedding_size
+        self.max_period = max_period
 
-    @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
+    def timestep_embedding(self, t, dim):
         # Standard sinusoidal embedding
         half = dim // 2
         freqs = torch.exp(
-            -np.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
+            -np.log(self.max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half
         ).to(device=t.device)
         args = t[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
@@ -68,18 +68,26 @@ class SinCosPosEmbed2D(nn.Module):
         return self.pos_embed.expand(x.shape[0], -1, -1)
 
 
+# conditioning.py - Update SinCosPosEmbed3D
 class SinCosPosEmbed3D(nn.Module):
-    def __init__(self, hidden_size, grid_size):
+    def __init__(self, hidden_size, grid_size, max_frames=512):
         super().__init__()
         self.grid_size = grid_size
-        pos_embed = get_2d_sincos_pos_embed(hidden_size, grid_size)
-        self.register_buffer("pos_embed", pos_embed)
+        # Spatial 2D
+        self.register_buffer("pos_embed_spatial", get_2d_sincos_pos_embed(hidden_size, grid_size))
+        # Temporal 1D
+        self.register_buffer("pos_embed_temporal",
+                             get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
 
     def forward(self, x):
         # x is (B, N, D) where N = F * H * W
-        # We assume f can be dynamic
         num_spatial_patches = self.grid_size ** 2
         f = x.shape[1] // num_spatial_patches
 
-        # Use repeat to stretch spatial info across the temporal axis
-        return repeat(self.pos_embed, '1 n d -> 1 (f n) d', f=f)
+        # 1. Expand spatial [1, H*W, D] -> [1, F, H*W, D]
+        spatial = self.pos_embed_spatial.unsqueeze(1).repeat(1, f, 1, 1)
+        # 2. Expand temporal [F, D] -> [1, F, 1, D]
+        temporal = self.pos_embed_temporal[:f, :].view(1, f, 1, -1)
+
+        # 3. Combine and flatten back to (1, F*H*W, D)
+        return (spatial + temporal).view(1, -1, x.shape[-1])

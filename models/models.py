@@ -3,13 +3,11 @@ __all__ = ['DiT', 'LatentDiffusion', 'Attention']
 import torch
 from einops import rearrange
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Attention
 
 from layers import PatchEmbed, FinalLayer
 from models.conditioning import TimestepEmbedder
-
-
-CLIP_LARGE_DIM = 768
 
 
 class DiTBlock(nn.Module):
@@ -41,15 +39,19 @@ class DiT(nn.Module):
             patch_size,
             in_channels,
             hidden_size,
+            cond_dim,
+            frequency_embedding_size,
+            max_period,
             depth,
             num_heads,
             pos_embedder,
             processor_class,  # e.g., Attention from timm
             conditioner_class,  # e.g., AdaLNZeroStrategy
             learn_variance,
-            cond_dim=CLIP_LARGE_DIM
+            gradient_checkpointing=False
     ):
         super().__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
@@ -59,8 +61,8 @@ class DiT(nn.Module):
 
         # 1. Embedders
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
-        self.pos_embedder = pos_embedder  # <--- New Strategy Class
-        self.t_embedder = TimestepEmbedder(hidden_size)
+        self.pos_embedder = pos_embedder
+        self.t_embedder = TimestepEmbedder(hidden_size, frequency_embedding_size, max_period)
         self.y_embedder = nn.Linear(cond_dim, hidden_size)
 
         # 2. Transformer Blocks (Stays the same)
@@ -99,7 +101,10 @@ class DiT(nn.Module):
 
         # 3. Blocks
         for block in self.blocks:
-            x = block(x, condition)
+            if self.gradient_checkpointing and self.training:
+                x = checkpoint(block, x, condition)
+            else:
+                x = block(x, condition)
 
         # 4. Final Projection
         x = self.final_layer(x, condition)
@@ -122,8 +127,10 @@ class DiT(nn.Module):
 
 
 class LatentDiffusion(nn.Module):
-    def __init__(self, dit_model, vae, text_encoder, engine):
+    def __init__(self, config, dit_model, vae, text_encoder, engine):
         super().__init__()
+        self.config = config
+
         self.transformer = dit_model
         self.vae = vae
         self.text_encoder = text_encoder
@@ -141,7 +148,7 @@ class LatentDiffusion(nn.Module):
 
         # VAE Encoding
         latents = self.vae.encode(pixel_values).latent_dist.sample()
-        latents = latents * 0.13025
+        latents = latents * self.config.model.vae_scale_factor
 
         # CLIP Encoding (assuming text_input is already tokenized)
         encoder_hidden_states = self.text_encoder(text_input)[0]

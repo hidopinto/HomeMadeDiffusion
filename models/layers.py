@@ -1,29 +1,24 @@
+import numpy as np
 from torch import nn
 from einops import rearrange  # Essential for "patchifying" and video tensor reshapes
 
 
+# layers.py - Update PatchEmbed
 class PatchEmbed(nn.Module):
-    def __init__(self, patch_size, in_chans=3, embed_dim=768):
+    def __init__(self, patch_size, in_chans, embed_dim):
         super().__init__()
+        # patch_size should be (t, h, w)
         self.patch_size = patch_size
-
-        # A Linear layer is the most agnostic way to project if you
-        # handle the "patch gathering" logic in the forward pass.
-        # Calculation: (channels * patch_h * patch_w) or (channels * patch_t * patch_h * patch_w)
-        # For simplicity, we'll assume a fixed patch volume for the linear input.
-        self.proj = nn.Linear(in_chans * (patch_size ** 2), embed_dim)
+        self.proj = nn.Linear(in_chans * np.prod(patch_size), embed_dim)
 
     def forward(self, x):
-        # x shape: (B, C, H, W) or (B, C, F, H, W)
-        p = self.patch_size
-
-        if x.ndim == 5:  # Video (B, C, F, H, W)
-            # Assuming temporal patches of size 1 for now (standard in many DiT-video models)
-            # If you want temporal patching (e.g. 2x2x2), change 'f' to '(f p_t)'
-            x = rearrange(x, 'b c f (h p1) (w p2) -> b (f h w) (c p1 p2)', p1=p, p2=p)
-        else:  # Image (B, C, H, W)
-            x = rearrange(x, 'b c (h p1) (w p2) -> b (h w) (c p1 p2)', p1=p, p2=p)
-
+        pt, ph, pw = self.patch_size
+        if x.ndim == 5: # Video (B, C, F, H, W)
+            x = rearrange(x, 'b c (f pt) (h ph) (w pw) -> b (f h w) (c pt ph pw)',
+                          pt=pt, ph=ph, pw=pw)
+        else: # Image
+            x = rearrange(x, 'b c (h ph) (w pw) -> b (h w) (c ph pw)',
+                          ph=ph, pw=pw)
         return self.proj(x)
 
 

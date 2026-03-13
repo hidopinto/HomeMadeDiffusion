@@ -1,79 +1,75 @@
 import torch
 import weave
+import yaml
+from box import Box
 from diffusers import AutoencoderKL
 from transformers import CLIPTextModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, CLIP_LARGE_DIM
+from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
 from diffusion_engine import DiffusionEngine, DDPM
 
 
-def load_frozen_models(device):
+def load_config(config_path="config.yaml"):
+    with open(config_path, "r") as f:
+        return Box(yaml.safe_load(f))
+
+
+def load_frozen_models(config, device):
     # SDXL VAE is generally preferred for its improved latent space
-    vae = AutoencoderKL.from_pretrained("madebyollin/sdxl-vae-fp16-fix", torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.float16)
 
     # CLIP Text Encoder (Standard for most DiT/Stable Diffusion research)
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
+    tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
+    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.float16)
 
     return vae.to(device), text_encoder.to(device), tokenizer
 
 
 def main():
-    weave.init("video-diffusion-research")
+    config = load_config(config_path="config.yaml")
+
+    weave.init(config.general.wnb_project_name)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Model conf
-    learn_variance=False
-    input_size = 32
-    patch_size = 2
-    grid_size = input_size // patch_size
-    hidden_size = 1152
-    in_channels = 4
-    depth = 28
-    num_heads = 16
-    # Optimizer conf
-    lr = 1e-4
-    weight_decay = 0
-    # Training conf
-    epochs = 100
-
     # 1. Load Frozen Giants
-    vae, text_encoder, tokenizer = load_frozen_models(device)
+    vae, text_encoder, tokenizer = load_frozen_models(config, device)
 
     # 2. Setup the "Math"
-    method = DDPM(learn_variance=learn_variance)
+    method = DDPM(learn_variance=config.dit.learn_variance)
     engine = DiffusionEngine(method=method)
 
     # 3. Setup 2D Positional Strategy
-    # Using 32 for a 256x256 image (8x VAE downscale)
-    pos_embedder = SinCosPosEmbed2D(hidden_size=hidden_size, grid_size=grid_size)
+    pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size)
 
     model_core = DiT(
-        input_size=input_size,
-        patch_size=patch_size,
-        in_channels=in_channels,
-        hidden_size=hidden_size,
-        depth=depth,
-        num_heads=num_heads,
+        input_size=config.dit.input_size,
+        patch_size=config.dit.patch_size,
+        in_channels=config.dit.in_channels,
+        hidden_size=config.dit.hidden_size,
+        cond_dim=config.dit.cond_dim,
+        sample_max_period=config.dit.sample_max_period,
+        max_period=config.dit.max_period,
+        depth=config.dit.depth,
+        num_heads=config.dit.num_heads,
         pos_embedder=pos_embedder,
-        processor_class=Attention,  # Fixed from None
-        conditioner_class=AdaLNZeroStrategy,  # Fixed from None
-        learn_variance=learn_variance,
-        cond_dim=CLIP_LARGE_DIM
+        processor_class=Attention,
+        conditioner_class=AdaLNZeroStrategy,
+        learn_variance=config.dit.learn_variance,
+        gradient_checkpointing=config.dit.gradient_checkpointing
     )
 
     # Wrap in LatentDiffusion
-    model = LatentDiffusion(model_core, vae=vae, text_encoder=text_encoder, engine=engine)
+    model = LatentDiffusion(config=config, dit_model=model_core, vae=vae, text_encoder=text_encoder, engine=engine)
 
     # 4. Optimizer & Scheduler
-    optimizer = AdamW(model.transformer.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = AdamW(model.transformer.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)
 
     # 5. Execute
     # TODO: add dataloader
-    trainer = DiTTrainer(model, dataloader=None, optimizer=optimizer, lr_scheduler=None)
-    trainer.fit(epochs=epochs)
+    trainer = DiTTrainer(config=config, model=model, dataloader=None, optimizer=optimizer, lr_scheduler=None)
+    trainer.fit(epochs=config.training.epochs)
 
 
 if __name__ == "__main__":

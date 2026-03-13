@@ -2,9 +2,18 @@ from accelerate import Accelerator
 
 
 class DiTTrainer:
-    def __init__(self, model, dataloader, optimizer, lr_scheduler):
-        # Initialize Accelerator with W&B integration
-        self.accelerator = Accelerator(log_with="wandb")
+    def __init__(self, config, model, dataloader, optimizer, lr_scheduler):
+        self.config = config
+
+        # BF16 is the standard for 30-series GPUs
+        self.accelerator = Accelerator(
+            mixed_precision=config.training.mixed_precision,
+            log_with="wandb"
+        )
+        self.model = model
+        if config.training.gradient_checkpointing:
+            # Reaches into the core DiT model to enable the flag we just added
+            self.model.transformer.gradient_checkpointing = True
 
         self.model = model
         self.dataloader = dataloader
@@ -27,8 +36,8 @@ class DiTTrainer:
             self.lr_scheduler.step()
         return loss
 
-    def fit(self, epochs, project_name="diffusion-video"):
-        self.accelerator.init_trackers(project_name)
+    def fit(self, epochs):
+        self.accelerator.init_trackers(self.config.general.wnb_project_name)
         for epoch in range(epochs):
             self.model.train()
             for batch in self.dataloader:
