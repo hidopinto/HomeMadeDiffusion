@@ -12,11 +12,12 @@ class PatchEmbed(nn.Module):
         self.proj = nn.Linear(in_chans * np.prod(self.patch_size), embed_dim)
 
     def forward(self, x):
-        pt, ph, pw = self.patch_size
         if x.ndim == 5: # Video (B, C, F, H, W)
+            pt, ph, pw = self.patch_size
             x = rearrange(x, 'b c (f pt) (h ph) (w pw) -> b (f h w) (c pt ph pw)',
                           pt=pt, ph=ph, pw=pw)
         else: # Image
+            ph, pw = self.patch_size
             x = rearrange(x, 'b c (h ph) (w pw) -> b (h w) (c ph pw)',
                           ph=ph, pw=pw)
         return self.proj(x)

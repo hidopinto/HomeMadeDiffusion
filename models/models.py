@@ -6,8 +6,8 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Attention
 
-from layers import PatchEmbed, FinalLayer
 from models.conditioning import TimestepEmbedder
+from models.layers import PatchEmbed, FinalLayer
 
 
 class DiTBlock(nn.Module):
