@@ -49,7 +49,7 @@ def main():
         in_channels=config.dit.in_channels,
         hidden_size=config.dit.hidden_size,
         cond_dim=config.dit.cond_dim,
-        sample_max_period=config.dit.sample_max_period,
+        frequency_embedding_size=config.dit.frequency_embedding_size,
         max_period=config.dit.max_period,
         depth=config.dit.depth,
         num_heads=config.dit.num_heads,
@@ -57,7 +57,8 @@ def main():
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
         learn_variance=config.dit.learn_variance,
-        gradient_checkpointing=config.dit.gradient_checkpointing
+        gradient_checkpointing=config.training.gradient_checkpointing,
+        use_reentrant=config.training.use_reentrant,
     )
 
     # Wrap in LatentDiffusion

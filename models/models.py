@@ -48,16 +48,18 @@ class DiT(nn.Module):
             processor_class,  # e.g., Attention from timm
             conditioner_class,  # e.g., AdaLNZeroStrategy
             learn_variance,
-            gradient_checkpointing=False
+            gradient_checkpointing=False,
+            use_reentrant=False
     ):
         super().__init__()
-        self.gradient_checkpointing = gradient_checkpointing
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
         self.cond_dim = cond_dim
         self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
         self.learn_variance = learn_variance
+        self.gradient_checkpointing = gradient_checkpointing
+        self.use_reentrant = use_reentrant
 
         # 1. Embedders
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
@@ -102,7 +104,7 @@ class DiT(nn.Module):
         # 3. Blocks
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
-                x = checkpoint(block, x, condition)
+                x = checkpoint(block, x, condition, self.use_reentrant)
             else:
                 x = block(x, condition)
 

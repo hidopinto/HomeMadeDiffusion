@@ -80,16 +80,15 @@ class SinCosPosEmbed3D(nn.Module):
                              get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
 
     def forward(self, x):
-        # x: [B, N, D] where N = F * H * W
         num_spatial_patches = self.grid_size ** 2
         f = x.shape[1] // num_spatial_patches
 
-        # spatial: [1, H*W, D] -> [1, 1, H*W, D]
-        spatial = self.pos_embed_spatial.unsqueeze(0)
+        # spatial: [1, HW, D] -> [1, 1, HW, D]
+        spatial = self.pos_embed_spatial.unsqueeze(1)
 
         # temporal: [F, D] -> [1, F, 1, D]
         temporal = self.pos_embed_temporal[:f, :].unsqueeze(0).unsqueeze(2)
 
-        # Broadcasting (1, F, 1, D) + (1, 1, HW, D) -> (1, F, HW, D)
+        # Resulting broadcasted shape: [1, F, HW, D]
         combined = spatial + temporal
-        return combined.view(1, -1, x.shape[-1])  # Result: [1, F*HW, D]
+        return combined.view(1, -1, x.shape[-1])

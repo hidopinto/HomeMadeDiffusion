@@ -24,6 +24,7 @@ training:
   weight_decay: 0
   mixed_precision: "bf16" # Best for RTX 3090
   gradient_checkpointing: True
+  use_reentrant: True
   batch_size: 2  # TODO: To my knowledge unused in the project for now
 
 general:

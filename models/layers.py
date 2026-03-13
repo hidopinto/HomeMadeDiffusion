@@ -8,8 +8,8 @@ class PatchEmbed(nn.Module):
     def __init__(self, patch_size, in_chans, embed_dim):
         super().__init__()
         # patch_size should be (t, h, w)
-        self.patch_size = patch_size
-        self.proj = nn.Linear(in_chans * np.prod(patch_size), embed_dim)
+        self.patch_size = patch_size if isinstance(patch_size, (list, tuple)) else (patch_size, patch_size, patch_size)
+        self.proj = nn.Linear(in_chans * np.prod(self.patch_size), embed_dim)
 
     def forward(self, x):
         pt, ph, pw = self.patch_size
