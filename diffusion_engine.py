@@ -7,23 +7,22 @@ class DDPM(nn.Module):
     def __init__(self, num_timesteps=1000, learn_variance=True, beta_start=0.0001, beta_end=0.02):
         super().__init__()
         self.num_timesteps = num_timesteps
-        self.learn_sigma = learn_variance
+        self.variance = learn_variance
 
-        # Precompute the linear beta schedule
         betas = torch.linspace(beta_start, beta_end, num_timesteps, dtype=torch.float64)
         alphas = 1.0 - betas
         alphas_cumprod = torch.cumprod(alphas, dim=0)
         alphas_cumprod_prev = torch.cat([torch.tensor([1.0]), alphas_cumprod[:-1]])
 
-        # register_buffer ensures these move to your GPU (RTX 3090) but aren't trained
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod).float())
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1.0 - alphas_cumprod).float())
 
-        # Calculations for the "True" Posterior q(x_{t-1} | x_t, x_0)
         posterior_variance = betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
-        self.register_buffer('posterior_variance', posterior_variance.float())
         self.register_buffer('posterior_log_variance_clipped',
                              torch.log(torch.cat([posterior_variance[1:2], posterior_variance[1:]])).float())
+
+        # FIX: Precompute the upper bound for variance interpolation
+        self.register_buffer('log_betas', torch.log(torch.cat([posterior_variance[1:2], betas[1:]])).float())
 
         self.register_buffer('posterior_mean_coef1',
                              (betas * torch.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod)).float())
@@ -41,33 +40,33 @@ class DDPM(nn.Module):
         return sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
 
     def calc_vlb_loss(self, x_0, x_t, t, eps_pred, var_v):
-        """The 'Divergence Sum' (KL Divergence) between true and predicted distributions."""
-        # 1. Get True Distribution (q) parameters
+        # 1. Get True Distribution (q)
         true_mean = self.posterior_mean_coef1[t].view(-1, 1, 1, 1) * x_0 + \
                     self.posterior_mean_coef2[t].view(-1, 1, 1, 1) * x_t
         true_log_var = self.posterior_log_variance_clipped[t].view(-1, 1, 1, 1)
 
-        # 2. Get Predicted Distribution (p) parameters
-        # Learned Sigma: var_v interpolates between min and max variance
-        min_log_var = self.posterior_log_variance_clipped[t].view(-1, 1, 1, 1)
-        max_log_var = torch.log(torch.linspace(0.0001, 0.02, self.num_timesteps).to(x_t.device))[t].view(-1, 1, 1, 1)
+        # 2. Get Predicted Distribution (p)
+        min_log_var = true_log_var
+        max_log_var = self.log_betas[t].view(-1, 1, 1, 1)
+        # Model predicts var_v which interpolates between min and max log variance
         model_log_var = var_v * max_log_var + (1 - var_v) * min_log_var
 
-        # Use predicted noise to estimate x_0 for the mean calculation
-        alpha_bar = (self.sqrt_alphas_cumprod[t] ** 2).view(-1, 1, 1, 1)
-        pred_x_0 = (x_t - torch.sqrt(1 - alpha_bar) * eps_pred) / torch.sqrt(alpha_bar)
+        # 3. Estimate x_0 to find predicted mean
+        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
+        inv_sqrt_alpha_bar = (1.0 / self.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1))
+        pred_x_0 = (x_t - sqrt_one_minus_alpha_bar * eps_pred) * inv_sqrt_alpha_bar
 
         model_mean = self.posterior_mean_coef1[t].view(-1, 1, 1, 1) * pred_x_0 + \
                      self.posterior_mean_coef2[t].view(-1, 1, 1, 1) * x_t
 
-        # 3. KL Divergence for two Gaussians
+        # 4. KL Divergence
         kl = 0.5 * (-1.0 + true_log_var - model_log_var + torch.exp(model_log_var - true_log_var) +
                     (true_mean - model_mean) ** 2 * torch.exp(-true_log_var))
         return kl.flatten(1).mean(1).mean()
 
     def loss(self, model, x_0, x_t, t, model_output, noise):
         """Combines MSE and VLB if learn_sigma is enabled."""
-        if not self.learn_sigma:
+        if not self.variance:
             return F.mse_loss(model_output, noise)
 
         eps_pred, var_v = torch.split(model_output, x_0.shape[1], dim=1)
