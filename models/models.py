@@ -148,7 +148,7 @@ class LatentDiffusion(nn.Module):
 
         # VAE Encoding
         latents = self.vae.encode(pixel_values).latent_dist.sample()
-        latents = latents * self.config.model.vae_scale_factor
+        latents = latents * self.config.dit.vae_scale_factor
 
         # CLIP Encoding (assuming text_input is already tokenized)
         encoder_hidden_states = self.text_encoder(text_input)[0]
