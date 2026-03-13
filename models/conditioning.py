@@ -68,8 +68,7 @@ class SinCosPosEmbed2D(nn.Module):
 
 
 class SinCosPosEmbed3D(nn.Module):
-    def __init__(self, hidden_size, grid_size, max_frames=512):
-        # TODO: receive max_frame from conf
+    def __init__(self, hidden_size, grid_size, max_frames):
         super().__init__()
         self.grid_size = grid_size
         self.hidden_size = hidden_size

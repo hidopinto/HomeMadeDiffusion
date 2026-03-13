@@ -7,7 +7,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
+from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, SinCosPosEmbed3D
 from diffusion_engine import DiffusionEngine, DDPM
 
 
@@ -41,9 +41,17 @@ def main():
     engine = DiffusionEngine(method=method)
 
     # 3. Setup 2D Positional Strategy
-    pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size)
+    latent_size = config.dit.input_size
+    patch_size = config.dit.patch_size[-1]  # Takes '2' from [2, 2]
+    grid_size = latent_size // patch_size
+
+    if config.general.is_video:
+        pos_embedder = SinCosPosEmbed3D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size, max_frames=config.dit.max_frames)
+    else:
+        pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size)
 
     model_core = DiT(
+        is_video=config.general.is_video,
         input_size=config.dit.input_size,
         patch_size=config.dit.patch_size,
         in_channels=config.dit.in_channels,
@@ -62,7 +70,7 @@ def main():
     )
 
     # Wrap in LatentDiffusion
-    model = LatentDiffusion(config=config, dit_model=model_core, vae=vae, text_encoder=text_encoder, engine=engine)
+    model = LatentDiffusion(config=config, dit_model=model_core, vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, engine=engine)
 
     # 4. Optimizer & Scheduler
     optimizer = AdamW(model.transformer.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)

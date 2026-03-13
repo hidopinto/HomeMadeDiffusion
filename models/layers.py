@@ -52,10 +52,11 @@ class FinalLayer(nn.Module):
         self.learn_sigma = learn_variance
         self.patch_size = patch_size if isinstance(patch_size, (list, tuple)) else (patch_size, patch_size)
         # If learning sigma, we need 2x the channels (mean + variance)
-        self.output_dim = out_channels * 2 if learn_variance else out_channels
+        self.out_channels = out_channels
+        self.v = 2 if learn_variance else 1
 
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, np.prod(self.patch_size) * self.output_dim, bias=True)
+        self.linear = nn.Linear(hidden_size, self.v * out_channels * np.prod(patch_size), bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)

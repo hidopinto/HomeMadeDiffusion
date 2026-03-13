@@ -35,6 +35,7 @@ class DiTBlock(nn.Module):
 class DiT(nn.Module):
     def __init__(
             self,
+            is_video,
             input_size,
             patch_size,
             in_channels,
@@ -52,7 +53,7 @@ class DiT(nn.Module):
             use_reentrant=False
     ):
         super().__init__()
-        self.is_video = len(patch_size) > 2
+        self.is_video = is_video
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
@@ -85,12 +86,12 @@ class DiT(nn.Module):
         t: (B,) timesteps
         y: (B, D) condition (already projected or class-embedded)
         """
-        batch, channels = x.shape[0], x.shape[1]
-
-        if self.is_video:
-            frames, height, width = x.shape[2:]
+        # Capture original dimensions before patch_embed flattens them
+        if x.ndim == 5:
+            orig_f, orig_h, orig_w = x.shape[2:]
         else:
-            height, width = x.shape[2:]
+            orig_f = None
+            orig_h, orig_w = x.shape[2:]
 
         # 1. Patchify & Position
         x = self.patch_embed(x)
@@ -116,30 +117,30 @@ class DiT(nn.Module):
         c = self.in_channels
 
         if self.is_video:
-            p_t, p_h, p_w = self.patch_size  #
-            # Calculate grid sizes based on the input latent dimensions
-            f_patches, h_patches, w_patches = frames // p_t, height // p_h, width // p_w
+            p_t, p_h, p_w = self.patch_size
+            f_p, h_p, w_p = orig_f // p_t, orig_h // p_h, orig_w // p_w
 
-            x = rearrange(x, 'b (f h w) (v c pt ph pw) -> b (v c) (f pt) (h ph) (w pw)',
-                          v=v, c=c, pt=p_t, ph=p_h, pw=p_w, f=f_patches, h=h_patches, w=w_patches)
+            x = rearrange(x, 'b (f_p h_p w_p) (v c p_t p_h p_w) -> b (v c) (f_p p_t) (h_p p_h) (w_p p_w)',
+                          v=v, c=c, f_p=f_p, h_p=h_p, w_p=w_p, p_t=p_t, p_h=p_h, p_w=p_w)
         else:
-            p_h, p_w = self.patch_size  #
-            h_patches, w_patches = height // p_h, width // p_w
+            p_h, p_w = self.patch_size
+            h_p, w_p = orig_h // p_h, orig_w // p_w
 
-            x = rearrange(x, 'b (h w) (v c ph pw) -> b (v c) (h ph) (w pw)',
-                          v=v, c=c, ph=p_h, pw=p_w, h=h_patches, w=w_patches)
+            x = rearrange(x, 'b (h_p w_p) (v c p_h p_w) -> b (v c) (h_p p_h) (w_p p_w)',
+                          v=v, c=c, h_p=h_p, w_p=w_p, p_h=p_h, p_w=p_w)
 
         return x
 
 
 class LatentDiffusion(nn.Module):
-    def __init__(self, config, dit_model, vae, text_encoder, engine):
+    def __init__(self, config, dit_model, vae, text_encoder, tokenizer, engine):
         super().__init__()
         self.config = config
 
         self.transformer = dit_model
         self.vae = vae
         self.text_encoder = text_encoder
+        self.tokenizer = tokenizer
         self.engine = engine  # This replaces 'scheduler' for training logic
 
         # Freeze the giants
@@ -148,21 +149,25 @@ class LatentDiffusion(nn.Module):
 
     # models.py - LatentDiffusion.process_input
     @torch.no_grad()
-    def process_input(self, pixel_values, text_input):
-        # Ensure inputs match the frozen giants' dtype
+    def process_input(self, pixel_values, text_prompts):
+        # 1. Handle Tokenization inside the model to keep train.py clean
+        text_inputs = self.tokenizer(
+            text_prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
+            truncation=True, return_tensors="pt"
+        ).to(pixel_values.device)
+
+        # 2. Match VAE/Encoder dtypes (bf16 for RTX 3090)
         pixel_values = pixel_values.to(self.vae.dtype)
 
-        # VAE Encoding
         latents = self.vae.encode(pixel_values).latent_dist.sample()
         latents = latents * self.config.dit.vae_scale_factor
 
-        # CLIP Encoding (assuming text_input is already tokenized)
-        encoder_hidden_states = self.text_encoder(text_input)[0]
-
+        encoder_hidden_states = self.text_encoder(text_inputs.input_ids)[0]
         pooled_cond = encoder_hidden_states.mean(dim=1)
 
-        # CRITICAL: Convert back to float32 for the Transformer core
-        return latents, pooled_cond
+        # 3. Ensure latents and cond are float32 for the DiT core if not using
+        # full bf16 training, or let Accelerator handle it.
+        return latents.float(), pooled_cond.float()
 
     def forward(self, pixel_values, text_input):
         # This is what your Trainer calls every step

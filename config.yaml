@@ -1,32 +1,32 @@
-# config.yaml
 external_models:
   vae: "madebyollin/sdxl-vae-fp16-fix"
   tokenizer: "openai/clip-vit-large-patch14"
   text_encoder: "openai/clip-vit-large-patch14"
-  # TODO: should I also add the torch.float16 torch_dtype to here?
 
 dit:
   input_size: 32
-  patch_size: [1, 2, 2] # (t, h, w)
-  grid_size: 16  # input_height // patch_height (or weight)
-  hidden_size: 1152 # DiT
-  in_channels: 4
-  cond_dim: 768 # Clip Large
+  patch_size: [2, 2]        # (t, h, w) for video, (h, w) for image
+  grid_size: 16             # input_height // patch_height (or weight)
+  in_channels: 4            # Standard SDXL Latent channels
+  hidden_size: 1024         # Reduced for faster training on 3090
+  cond_dim: 768             # Matches CLIP ViT-L/14
   frequency_embedding_size: 256
   max_period: 10000
-  depth: 28
-  num_heads: 16
-  learn_variance: False
+  max_frames: 512           # Video only
+  depth: 12                 # Reduced from 28 for "simple" version
+  num_heads: 12             # hidden_size / 64
+  learn_variance: False     # Simpler DDPM loss
   vae_scale_factor: 0.18215 # SDXL Standard
 
 training:
   epochs: 100
   lr: 1.0e-4
-  weight_decay: 0
-  mixed_precision: "bf16" # Best for RTX 3090
+  weight_decay: 0.01
+  mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
-  use_reentrant: True
-  batch_size: 2  # TODO: To my knowledge unused in the project for now
+  use_reentrant: False
+  batch_size: 8  # TODO: To my knowledge unused in the project for now
 
 general:
+  is_video: False           # Explicitly set for conditional logic
   wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Image-Diffusion"
