@@ -52,6 +52,7 @@ class DiT(nn.Module):
             use_reentrant=False
     ):
         super().__init__()
+        self.is_video = len(patch_size) > 2
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
@@ -84,10 +85,9 @@ class DiT(nn.Module):
         t: (B,) timesteps
         y: (B, D) condition (already projected or class-embedded)
         """
-        is_video = x.dim() == 5
         batch, channels = x.shape[0], x.shape[1]
 
-        if is_video:
+        if self.is_video:
             frames, height, width = x.shape[2:]
         else:
             height, width = x.shape[2:]
@@ -116,7 +116,7 @@ class DiT(nn.Module):
         c = self.in_channels
         v = 2 if self.learn_variance else 1
 
-        if is_video:
+        if self.is_video:
             # Resulting shape: (B, v*C, F, H, W)
             # The engine will split this into (B, C, F, H, W) for epsilon and variance
             x = rearrange(x, 'b (f h w) (v c p1 p2) -> b (v c) f (h p1) (w p2)',

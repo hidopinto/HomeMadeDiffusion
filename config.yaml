@@ -20,6 +20,7 @@ dit:
   vae_scale_factor: 0.18215 # SDXL Standard
 
 training:
+  epochs: 100
   lr: 1.0e-4
   weight_decay: 0
   mixed_precision: "bf16" # Best for RTX 3090
