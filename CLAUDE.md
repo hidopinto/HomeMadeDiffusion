@@ -15,9 +15,26 @@ python train.py
 
 # Validate tensor shapes (smoke test for architecture)
 python scripts/validate_shapes.py
+
+# Check GPU  (Skill)
+python /vram-check
+
+# Check ViT shapes  (Skill)
+python /check-shapes
 ```
 
 No formal test suite exists — `scripts/validate_shapes.py` is the primary correctness check.
+
+## Hardware Constraints
+- **VRAM Limit**: 24GB. 
+- **Precision**: Use `bf16` or `fp16` mixed precision for all training.
+- **Memory**: Use Gradient Checkpointing; limit video batch size to 1-2.
+- **Safety**: Do not exceed 90% GPU utility to prevent system instability.
+
+## Style & Workflow
+- **Rules**: Use `einops` for tensor manipulation; avoid `view`/`reshape`.
+- **Types**: Mandatory Type Hints for all PyTorch modules.
+- **Planning**: For any multi-file change, ask for a `/plan` first.
 
 ## Architecture
 
