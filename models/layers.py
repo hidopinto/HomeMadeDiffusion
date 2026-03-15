@@ -16,7 +16,7 @@ class PatchEmbed(nn.Module):
             pt, ph, pw = self.patch_size
             x = rearrange(x, 'b c (f pt) (h ph) (w pw) -> b (f h w) (c pt ph pw)',
                           pt=pt, ph=ph, pw=pw)
-        else: # Image
+        else: # Image (B, C, H, W)
             ph, pw = self.patch_size
             x = rearrange(x, 'b c (h ph) (w pw) -> b (h w) (c ph pw)',
                           ph=ph, pw=pw)
