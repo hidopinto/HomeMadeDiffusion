@@ -28,7 +28,8 @@ training:
 
 general:
   is_video: False           # Explicitly set for conditional logic
-  wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Home-Made-Diffusion"
+  wnb_project_name: "Home-Made-Diffusion"
+  wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
   dataset_name: "diffusers/pokemon-gpt4-captions"

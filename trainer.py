@@ -39,7 +39,10 @@ class DiTTrainer:
         return loss
 
     def fit(self, epochs):
-        self.accelerator.init_trackers(self.config.general.wnb_project_name)
+        self.accelerator.init_trackers(
+            self.config.general.wnb_project_name,
+            init_kwargs={"wandb": {"entity": self.config.general.wnb_entity}},
+        )
         for epoch in range(epochs):
             self.model.train()
             for batch in self.dataloader:
