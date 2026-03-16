@@ -30,3 +30,13 @@ training:
 general:
   is_video: False           # Explicitly set for conditional logic
   wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Image-Diffusion"
+
+data:
+  dataset_name: "lambdalabs/pokemon-blip-captions"
+  split: "train"
+  image_size: 256
+  image_key: "image"
+  caption_key: "text"
+  cache_dir: "cache"
+  encoding_batch_size: 8
+  num_workers: 4

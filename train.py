@@ -9,6 +9,7 @@ from torch.optim import AdamW
 from trainer import DiTTrainer
 from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, SinCosPosEmbed3D
 from diffusion_engine import DiffusionEngine, DDPM
+from data import build_dataloader
 
 
 def load_config(config_path="config.yaml"):
@@ -75,9 +76,11 @@ def main():
     # 4. Optimizer & Scheduler
     optimizer = AdamW(model.transformer.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)
 
-    # 5. Execute
-    # TODO: add dataloader
-    trainer = DiTTrainer(config=config, model=model, dataloader=None, optimizer=optimizer, lr_scheduler=None)
+    # 5. Build cached dataloader (encodes once, reuses on subsequent runs)
+    dataloader = build_dataloader(config, vae, tokenizer, text_encoder, device)
+
+    # 6. Execute
+    trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=None)
     trainer.fit(epochs=config.training.epochs)
 
 

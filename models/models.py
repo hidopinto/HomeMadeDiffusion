@@ -2,7 +2,7 @@ __all__ = ['DiT', 'LatentDiffusion', 'Attention']
 
 import torch
 from einops import rearrange
-from torch import nn
+from torch import nn, Tensor
 from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Attention
 
@@ -147,9 +147,8 @@ class LatentDiffusion(nn.Module):
         self.vae.eval().requires_grad_(False)
         self.text_encoder.eval().requires_grad_(False)
 
-    # models.py - LatentDiffusion.process_input
     @torch.no_grad()
-    def process_input(self, pixel_values, text_prompts):
+    def encode_inputs(self, pixel_values: Tensor, text_prompts) -> tuple[Tensor, Tensor]:
         # 1. Handle Tokenization inside the model to keep train.py clean
         text_inputs = self.tokenizer(
             text_prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
@@ -169,10 +168,6 @@ class LatentDiffusion(nn.Module):
         # full bf16 training, or let Accelerator handle it.
         return latents.float(), pooled_cond.float()
 
-    def forward(self, pixel_values, text_input):
-        # This is what your Trainer calls every step
-        latents, cond = self.process_input(pixel_values, text_input)
-
-        # The engine handles the noise math (DDPM or Flow)
-        loss = self.engine.compute_loss(self.transformer, latents, cond)
+    def forward(self, latents: Tensor, text_embeds: Tensor) -> Tensor:
+        loss = self.engine.compute_loss(self.transformer, latents, text_embeds)
         return loss

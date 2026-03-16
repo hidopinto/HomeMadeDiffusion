@@ -1,3 +1,4 @@
+import torch
 from accelerate import Accelerator
 
 
@@ -25,12 +26,12 @@ class DiTTrainer:
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
 
-    def train_step(self, batch):
-        pixels, text_input = batch
+    def train_step(self, batch: dict) -> "torch.Tensor":
+        latents = batch["latent"]
+        text_embeds = batch["text_embed"]
         with self.accelerator.accumulate(self.model):
             self.optimizer.zero_grad()
-            # LatentDiffusion.forward handles the Engine call
-            loss = self.model(pixels, text_input)
+            loss = self.model(latents, text_embeds)
             self.accelerator.backward(loss)
             self.optimizer.step()
             if self.lr_scheduler is not None:

@@ -5,6 +5,7 @@ description = "Add your description here"
 requires-python = ">=3.14"
 dependencies = [
     "accelerate>=1.13.0",
+    "datasets>=4.7.0",
     "deepspeed>=0.18.7",
     "diffusers>=0.37.0",
     "einops>=0.8.2",
