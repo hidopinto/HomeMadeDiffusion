@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from datasets import load_dataset
 from torch.utils.data import DataLoader
 
 from data.cache import CacheManifest, LatentCachingEngine
@@ -34,7 +35,6 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
     if cache_valid:
         print("Cache valid, loading from disk...")
     else:
-        from datasets import load_dataset
         raw_dataset = load_dataset(dataset_name, split=split)
         engine = LatentCachingEngine(
             vae=vae,

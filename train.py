@@ -6,7 +6,7 @@ import yaml
 from box import Box
 from diffusers import AutoencoderKL
 from dotenv import load_dotenv
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
@@ -26,7 +26,8 @@ def load_frozen_models(config, device):
 
     # CLIP Text Encoder (Standard for most DiT/Stable Diffusion research)
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
+    clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
+    text_encoder = clip.text_model
 
     return vae.to(device), text_encoder.to(device), tokenizer
 
