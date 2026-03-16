@@ -104,7 +104,7 @@ class DiT(nn.Module):
         # 3. Blocks
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
-                x = checkpoint(block, x, condition, self.use_reentrant)
+                x = checkpoint(block, x, condition, use_reentrant=self.use_reentrant)
             else:
                 x = block(x, condition)
 
