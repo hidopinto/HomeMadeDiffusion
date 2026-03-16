@@ -1,8 +1,11 @@
+import huggingface_hub
 import torch
 import weave
+import wandb
 import yaml
 from box import Box
 from diffusers import AutoencoderKL
+from dotenv import load_dotenv
 from transformers import CLIPTextModel, CLIPTokenizer
 from torch.optim import AdamW
 
@@ -29,6 +32,10 @@ def load_frozen_models(config, device):
 
 
 def main():
+    load_dotenv()
+    huggingface_hub.login()
+    wandb.login()
+
     config = load_config(config_path="config.yaml")
 
     weave.init(config.general.wnb_project_name)

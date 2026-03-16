@@ -215,8 +215,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Secrets
-wnb_token.txt
-
 # Latent cache
 cache/
