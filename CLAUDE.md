@@ -83,7 +83,5 @@ Each `DiTBlock` uses AdaLN-Zero conditioning: a shared MLP projects `(timestep_e
 
 ## Known TODOs / Incomplete Areas
 
-- `data.py` — dataset and latent caching not yet implemented
-- `config.training.batch_size` — declared in config but not yet wired into training
 - Inference/sampling pipeline — not implemented
 - `hydra-core`, `deepspeed`, `optimum` — declared as dependencies but unused
