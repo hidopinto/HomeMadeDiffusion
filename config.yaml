@@ -28,7 +28,7 @@ training:
 
 general:
   is_video: False           # Explicitly set for conditional logic
-  wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Image-Diffusion"
+  wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Home-Made-Diffusion"
 
 data:
   dataset_name: "lambdalabs/pokemon-blip-captions"
