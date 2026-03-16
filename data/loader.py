@@ -20,6 +20,7 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
         image_size=config.data.image_size,
         vae_model_id=config.external_models.vae,
         encoder_keys=["text_embed"],
+        encoder_model_ids={"text_embed": config.external_models.text_encoder},
         num_samples=-1,
         is_video=config.general.is_video,
     )
@@ -42,6 +43,7 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
             text_encoders={"text_embed": text_encoder},
             config=config,
             device=device,
+            encoder_model_ids={"text_embed": config.external_models.text_encoder},
         )
         engine.run(raw_dataset, cache_root)
 

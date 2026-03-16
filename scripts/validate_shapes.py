@@ -1,6 +1,6 @@
 import torch
 from box import Box
-from models import DiT, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy
+from models import DiT, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, AdaLNTextProjector
 
 
 def validate_shapes():
@@ -15,7 +15,7 @@ def validate_shapes():
             "frequency_embedding_size": 256,
             "max_period": 10000,
             "depth": 4,
-            "num_heads": 8,
+            "num_heads": 12,
             "learn_variance": True  # Testing the "Comment 3" bug fix
         },
         "general": {"is_video": False},
@@ -28,13 +28,14 @@ def validate_shapes():
 
     # 2. Initialize Model Parts
     pos_embedder = SinCosPosEmbed2D(config.dit.hidden_size, grid_size).to(device)
+    text_projector = AdaLNTextProjector(cond_dim=config.dit.cond_dim, hidden_size=config.dit.hidden_size).to(device)
 
     model = DiT(
         input_size=config.dit.input_size,
         patch_size=config.dit.patch_size,
         in_channels=config.dit.in_channels,
         hidden_size=config.dit.hidden_size,
-        cond_dim=config.dit.cond_dim,
+        text_projector=text_projector,
         frequency_embedding_size=config.dit.frequency_embedding_size,
         max_period=config.dit.max_period,
         depth=config.dit.depth,
@@ -51,7 +52,10 @@ def validate_shapes():
     # Simulated SDXL Latents: (B, C, H, W)
     x = torch.randn(batch_size, 4, 32, 32).to(device)
     t = torch.randint(0, 1000, (batch_size,)).to(device)
-    y = torch.randn(batch_size, 768).to(device)  # Pooled CLIP cond
+    y = {  # Full text dict (B, T, D) + mask
+        "hidden_states": torch.randn(batch_size, 77, 768).to(device),
+        "attention_mask": torch.ones(batch_size, 77, dtype=torch.long).to(device),
+    }
 
     print(f"Input Shape: {x.shape}")
 

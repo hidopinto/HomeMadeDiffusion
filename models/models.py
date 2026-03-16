@@ -7,7 +7,7 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Attention
 
 from models.conditioning import TimestepEmbedder
-from models.layers import PatchEmbed, FinalLayer
+from models.layers import PatchEmbed, FinalLayer, AdaLNTextProjector
 
 
 class DiTBlock(nn.Module):
@@ -40,7 +40,7 @@ class DiT(nn.Module):
             patch_size,
             in_channels,
             hidden_size,
-            cond_dim,
+            text_projector: AdaLNTextProjector,
             frequency_embedding_size,
             max_period,
             depth,
@@ -57,7 +57,6 @@ class DiT(nn.Module):
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.hidden_size = hidden_size
-        self.cond_dim = cond_dim
         self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
         self.learn_variance = learn_variance
         self.gradient_checkpointing = gradient_checkpointing
@@ -67,7 +66,7 @@ class DiT(nn.Module):
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
         self.pos_embedder = pos_embedder
         self.t_embedder = TimestepEmbedder(hidden_size, frequency_embedding_size, max_period)
-        self.y_embedder = nn.Linear(cond_dim, hidden_size)
+        self.text_projector = text_projector
 
         # 2. Transformer Blocks (Stays the same)
         self.blocks = nn.ModuleList([
@@ -80,11 +79,11 @@ class DiT(nn.Module):
 
         self.final_layer = FinalLayer(hidden_size, patch_size, in_channels, learn_variance=learn_variance)
 
-    def forward(self, x, t, y=None):
+    def forward(self, x, t, y: dict | None = None):
         """
         x: (B, C, H, W) or (B, C, F, H, W)
         t: (B,) timesteps
-        y: (B, D) condition (already projected or class-embedded)
+        y: dict with "hidden_states" (B, T, D) and "attention_mask" (B, T)
         """
         # Capture original dimensions before patch_embed flattens them
         if x.ndim == 5:
@@ -100,7 +99,7 @@ class DiT(nn.Module):
         # 2. Conditioning
         condition = self.t_embedder(t)
         if y is not None:
-            condition = condition + self.y_embedder(y)
+            condition = condition + self.text_projector(y)
 
         # 3. Blocks
         for block in self.blocks:
@@ -148,7 +147,7 @@ class LatentDiffusion(nn.Module):
         self.text_encoder.eval().requires_grad_(False)
 
     @torch.no_grad()
-    def encode_inputs(self, pixel_values: Tensor, text_prompts) -> tuple[Tensor, Tensor]:
+    def encode_inputs(self, pixel_values: Tensor, text_prompts) -> tuple[Tensor, dict]:
         # 1. Handle Tokenization inside the model to keep train.py clean
         text_inputs = self.tokenizer(
             text_prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
@@ -161,13 +160,14 @@ class LatentDiffusion(nn.Module):
         latents = self.vae.encode(pixel_values).latent_dist.sample()
         latents = latents * self.config.dit.vae_scale_factor
 
-        encoder_hidden_states = self.text_encoder(text_inputs.input_ids)[0]
-        pooled_cond = encoder_hidden_states.mean(dim=1)
+        hidden_states = self.text_encoder(text_inputs.input_ids)[0]
+        text_embeds = {
+            "hidden_states": hidden_states.float(),
+            "attention_mask": text_inputs.attention_mask,
+        }
 
-        # 3. Ensure latents and cond are float32 for the DiT core if not using
-        # full bf16 training, or let Accelerator handle it.
-        return latents.float(), pooled_cond.float()
+        return latents.float(), text_embeds
 
-    def forward(self, latents: Tensor, text_embeds: Tensor) -> Tensor:
+    def forward(self, latents: Tensor, text_embeds: dict) -> Tensor:
         loss = self.engine.compute_loss(self.transformer, latents, text_embeds)
         return loss

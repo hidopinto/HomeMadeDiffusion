@@ -13,7 +13,7 @@ dit:
   max_period: 10000
   max_frames: 512           # Video only
   depth: 12                 # Reduced from 28 for "simple" version
-  num_heads: 12             # hidden_size / 64
+  num_heads: 16             # hidden_size / 64
   learn_variance: False     # Simpler DDPM loss
   vae_scale_factor: 0.18215 # SDXL Standard
 

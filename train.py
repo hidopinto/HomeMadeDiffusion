@@ -10,7 +10,7 @@ from transformers import CLIPModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, SinCosPosEmbed3D
+from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, SinCosPosEmbed3D, AdaLNTextProjector
 from diffusion_engine import DiffusionEngine, DDPM
 from data import build_dataloader
 
@@ -59,13 +59,18 @@ def main():
     else:
         pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=grid_size)
 
+    text_projector = AdaLNTextProjector(
+        cond_dim=config.dit.cond_dim,
+        hidden_size=config.dit.hidden_size,
+    )
+
     model_core = DiT(
         is_video=config.general.is_video,
         input_size=config.dit.input_size,
         patch_size=config.dit.patch_size,
         in_channels=config.dit.in_channels,
         hidden_size=config.dit.hidden_size,
-        cond_dim=config.dit.cond_dim,
+        text_projector=text_projector,
         frequency_embedding_size=config.dit.frequency_embedding_size,
         max_period=config.dit.max_period,
         depth=config.dit.depth,

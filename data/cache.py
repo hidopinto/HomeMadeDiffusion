@@ -18,6 +18,7 @@ class CacheManifest:
     image_size: int
     vae_model_id: str
     encoder_keys: list[str]
+    encoder_model_ids: dict[str, str]
     num_samples: int
     is_video: bool
 
@@ -35,6 +36,7 @@ class CacheManifest:
             and self.image_size == other.image_size
             and self.vae_model_id == other.vae_model_id
             and sorted(self.encoder_keys) == sorted(other.encoder_keys)
+            and self.encoder_model_ids == other.encoder_model_ids
             and self.is_video == other.is_video
         )
 
@@ -47,12 +49,14 @@ class LatentCachingEngine:
         text_encoders: dict[str, TextEncoderProtocol],
         config,
         device: str,
+        encoder_model_ids: dict[str, str] | None = None,
     ) -> None:
         self.vae = vae
         self.tokenizer = tokenizer
         self.text_encoders = text_encoders
         self.config = config
         self.device = device
+        self.encoder_model_ids = encoder_model_ids or {}
 
     def run(self, dataset, cache_root: Path) -> Path:
         dataset_name = self.config.data.dataset_name
@@ -94,7 +98,11 @@ class LatentCachingEngine:
 
                 for key, embeds in text_embeds.items():
                     tmp = cache_dir / key / f"tmp_{i:06d}.pt"
-                    torch.save(embeds[j].cpu(), tmp)
+                    sample = {
+                        "hidden_states": embeds["hidden_states"][j].cpu(),
+                        "attention_mask": embeds["attention_mask"][j].cpu(),
+                    }
+                    torch.save(sample, tmp)
                     tmp.rename(cache_dir / key / f"{i:06d}.pt")
 
         manifest = CacheManifest(
@@ -103,6 +111,7 @@ class LatentCachingEngine:
             image_size=self.config.data.image_size,
             vae_model_id=self.config.external_models.vae,
             encoder_keys=list(self.text_encoders.keys()),
+            encoder_model_ids=self.encoder_model_ids,
             num_samples=n,
             is_video=self.config.general.is_video,
         )
@@ -147,11 +156,14 @@ class LatentCachingEngine:
             return_tensors="pt",
         )
         input_ids = text_inputs.input_ids.to(self.device)
+        attention_mask = text_inputs.attention_mask  # (B, 77)
 
-        text_embeds: dict[str, Tensor] = {}
+        text_embeds: dict[str, dict[str, Tensor]] = {}
         for key, encoder in self.text_encoders.items():
-            hidden_states = encoder(input_ids)[0]       # (B, 77, 768)
-            pooled = hidden_states.mean(dim=1).float()  # (B, 768)
-            text_embeds[key] = pooled
+            hidden_states = encoder(input_ids)[0]  # (B, 77, 768)
+            text_embeds[key] = {
+                "hidden_states": hidden_states.float(),  # (B, 77, 768)
+                "attention_mask": attention_mask,        # (B, 77)
+            }
 
         return latents, text_embeds
