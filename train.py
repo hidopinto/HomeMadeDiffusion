@@ -47,9 +47,9 @@ def main():
     grid_size = latent_size // patch_size
 
     if config.general.is_video:
-        pos_embedder = SinCosPosEmbed3D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size, max_frames=config.dit.max_frames)
+        pos_embedder = SinCosPosEmbed3D(hidden_size=config.dit.hidden_size, grid_size=grid_size, max_frames=config.dit.max_frames)
     else:
-        pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=config.dit.grid_size)
+        pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=grid_size)
 
     model_core = DiT(
         is_video=config.general.is_video,

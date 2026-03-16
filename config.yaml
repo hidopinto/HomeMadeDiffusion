@@ -6,7 +6,6 @@ external_models:
 dit:
   input_size: 32
   patch_size: [2, 2]        # (t, h, w) for video, (h, w) for image
-  grid_size: 16             # input_height // patch_height (or weight)
   in_channels: 4            # Standard SDXL Latent channels
   hidden_size: 1024         # Reduced for faster training on 3090
   cond_dim: 768             # Matches CLIP ViT-L/14
