@@ -31,7 +31,7 @@ general:
   wnb_project_name: "hidopinto-1-weizmann-institute-of-science/Home-Made-Diffusion"
 
 data:
-  dataset_name: "lambdalabs/pokemon-blip-captions"
+  dataset_name: "diffusers/pokemon-gpt4-captions"
   split: "train"
   image_size: 256
   image_key: "image"
