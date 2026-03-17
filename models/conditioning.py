@@ -76,7 +76,8 @@ class SinCosPosEmbed3D(nn.Module):
         # Spatial 2D
         self.register_buffer("pos_embed_spatial", get_2d_sincos_pos_embed(hidden_size, grid_size))
         # Temporal 1D
-        self.register_buffer("pos_embed_temporal", get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames)))
+        temporal_embed = get_1d_sincos_pos_embed_from_grid(hidden_size, np.arange(max_frames))
+        self.register_buffer("pos_embed_temporal", torch.from_numpy(temporal_embed).float())
 
     def forward(self, x):
         # x shape: [B, N, D]

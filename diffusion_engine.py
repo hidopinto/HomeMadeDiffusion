@@ -40,9 +40,10 @@ class DDPM(nn.Module):
 
     def q_sample(self, x_0, t, noise):
         """Standard Forward Process: x_t = sqrt(alpha_bar)*x_0 + sqrt(1-alpha_bar)*noise"""
-        # Shapes: (B, 1, 1, 1) to broadcast across (B, C, H, W)
-        sqrt_alpha_bar = self.sqrt_alphas_cumprod[t].view(-1, 1, 1, 1)
-        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t].view(-1, 1, 1, 1)
+        # view_shape broadcasts over any ndim (4D images or 5D video tensors)
+        view_shape = (-1,) + (1,) * (x_0.ndim - 1)
+        sqrt_alpha_bar = self.sqrt_alphas_cumprod[t].view(view_shape)
+        sqrt_one_minus_alpha_bar = self.sqrt_one_minus_alphas_cumprod[t].view(view_shape)
         return sqrt_alpha_bar * x_0 + sqrt_one_minus_alpha_bar * noise
 
     def calc_vlb_loss(self, x_0, x_t, t, eps_pred, var_v):
