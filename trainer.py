@@ -109,7 +109,7 @@ class DiTTrainer:
                     num_steps=inference_steps,
                 )
                 self.accelerator.log({
-                    "inference/images": wandb.Image(images[0].cpu()),
+                    "inference/images": wandb.Image(images[0].detach().cpu().to(torch.float32)),
                     "inference/epoch": epoch + 1,
                 })
                 unwrapped.transformer.train()
