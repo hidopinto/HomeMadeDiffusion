@@ -10,6 +10,15 @@ from diffusion_engine import DDPM, DiffusionEngine
 from models import AdaLNTextProjector, AdaLNZeroStrategy, DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D
 from samplers import DDIMSampler, DDPMSampler
 
+METHOD_REGISTRY: dict[str, type] = {
+    "ddpm": DDPM,
+}
+
+SAMPLER_REGISTRY: dict[str, type] = {
+    "ddpm": DDPMSampler,
+    "ddim": DDIMSampler,
+}
+
 
 def load_frozen_models(config: Box, device: str) -> tuple:
     vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
@@ -20,10 +29,16 @@ def load_frozen_models(config: Box, device: str) -> tuple:
 
 def build_model(config: Box, device: str, gradient_checkpointing: bool = False) -> LatentDiffusion:
     vae, text_encoder, tokenizer = load_frozen_models(config, device)
-    method = DDPM(learn_variance=config.dit.learn_variance)
+    method_name = config.diffusion.method
+    method_cfg = config.diffusion[method_name]
+    method = METHOD_REGISTRY[method_name](
+        num_timesteps=method_cfg.num_timesteps,
+        learn_variance=config.dit.learn_variance,
+        beta_start=method_cfg.beta_start,
+        beta_end=method_cfg.beta_end,
+    )
 
-    sampler_name = getattr(config.training, "sampler", "ddim")
-    sampler = DDIMSampler(method) if sampler_name == "ddim" else DDPMSampler(method)
+    sampler = SAMPLER_REGISTRY[config.diffusion.sampler](method)
     engine = DiffusionEngine(method=method, sampler=sampler)
 
     patch_size = config.dit.patch_size[-1]

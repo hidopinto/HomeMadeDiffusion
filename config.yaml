@@ -3,6 +3,14 @@ external_models:
   tokenizer: "openai/clip-vit-large-patch14"
   text_encoder: "openai/clip-vit-large-patch14"
 
+diffusion:
+  method: "ddpm"
+  sampler: "ddim"       # "ddim" or "ddpm"
+  ddpm:
+    num_timesteps: 1000
+    beta_start: 0.0001
+    beta_end: 0.02
+
 dit:
   input_size: 32
   patch_size: [2, 2]        # (t, h, w) for video, (h, w) for image
@@ -25,11 +33,12 @@ training:
   gradient_checkpointing: True
   use_reentrant: False
   batch_size: 8
-  sampler: "ddim"           # "ddim" or "ddpm"
   save_every: 5             # Save checkpoint every N epochs
   checkpoint_dir: "checkpoints"
-  inference_every: null     # Run inference every N epochs; null = disabled
-  inference_prompt: "a cute pokemon"
+  inference_every: 1     # Run inference every N epochs; null = disabled
+  inference_prompt: "A cute pokemon"
+  # inference_prompt: A blue Turtwig standing on a wooden table, solid green background.
+  # inference_prompt: "A blue Turtwig eating a burger"
   inference_steps: 50       # DDIM steps for in-training inference
 
 general:
