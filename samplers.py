@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 import torch
+from dataclasses import dataclass, field
+from typing import Callable
 from torch import Tensor
 
 from diffusion_engine import DDPM
+
+
+@dataclass
+class IntermediateCollector:
+    capture_fn: Callable[[int, int, Tensor], bool]
+    latents: list[Tensor] = field(default_factory=list)
+    step_indices: list[int] = field(default_factory=list)
+    decoded_images: list[Tensor] = field(default_factory=list)
+
+    def maybe_collect(self, step_idx: int, total_steps: int, x: Tensor) -> None:
+        if self.capture_fn(step_idx, total_steps, x):
+            self.latents.append(x.clone())
+            self.step_indices.append(step_idx)
 
 
 class DDPMSampler:
@@ -29,10 +44,13 @@ class DDPMSampler:
 
     @torch.no_grad()
     def sample_loop(self, model_fn: callable, shape: tuple, device: torch.device,
-                    model_kwargs: dict | None = None) -> Tensor:
+                    model_kwargs: dict | None = None,
+                    collector: IntermediateCollector | None = None) -> Tensor:
         x = torch.randn(shape, device=device)
         for t_idx in reversed(range(self.schedule.num_timesteps)):
             x = self._step(model_fn, x, t_idx, model_kwargs=model_kwargs)
+            if collector is not None:
+                collector.maybe_collect(t_idx, self.schedule.num_timesteps, x)
         return x
 
 
@@ -64,10 +82,13 @@ class DDIMSampler:
     @torch.no_grad()
     def sample_loop(self, model_fn: callable, shape: tuple, device: torch.device,
                     num_steps: int = 50, eta: float = 0.0,
-                    model_kwargs: dict | None = None) -> Tensor:
+                    model_kwargs: dict | None = None,
+                    collector: IntermediateCollector | None = None) -> Tensor:
         x = torch.randn(shape, device=device)
         timesteps = torch.linspace(self.schedule.num_timesteps - 1, 0, num_steps, dtype=torch.long).tolist()
         for i, t_idx in enumerate(timesteps):
             t_prev = int(timesteps[i + 1]) if i + 1 < len(timesteps) else -1
             x = self._step(model_fn, x, int(t_idx), t_prev, eta=eta, model_kwargs=model_kwargs)
+            if collector is not None:
+                collector.maybe_collect(i, num_steps, x)
         return x
