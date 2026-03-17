@@ -64,6 +64,8 @@ class DiTTrainer:
         infer_every = getattr(self.config.training, "inference_every", None)
         checkpoint_dir = getattr(self.config.training, "checkpoint_dir", "checkpoints")
 
+        global_step = 0
+
         for epoch in range(epochs):
             self.model.train()
             epoch_loss = 0.0
@@ -75,13 +77,14 @@ class DiTTrainer:
                 loss_val = loss.item()
                 epoch_loss += loss_val
                 epoch_steps += 1
+                global_step += 1
 
                 current_lr = self.optimizer.param_groups[0]["lr"]
                 self.accelerator.log({
                     "train/loss": loss_val,
                     "train/lr": current_lr,
                     "train/grad_norm": grad_norm,
-                })
+                }, step=global_step)
 
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0
@@ -91,7 +94,7 @@ class DiTTrainer:
                 "train/epoch_loss": mean_loss,
                 "train/epoch": epoch + 1,
                 "train/samples_per_sec": samples_per_sec,
-            })
+            }, step=global_step)
 
             if epoch_steps > 0 and save_every and (epoch + 1) % save_every == 0:
                 self.accelerator.wait_for_everyone()
@@ -111,7 +114,7 @@ class DiTTrainer:
                 self.accelerator.log({
                     "inference/images": wandb.Image(images[0].detach().cpu().to(torch.float32)),
                     "inference/epoch": epoch + 1,
-                })
+                }, step=global_step)
                 unwrapped.transformer.train()
 
         self.accelerator.end_training()
