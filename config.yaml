@@ -40,6 +40,7 @@ training:
   # inference_prompt: A blue Turtwig standing on a wooden table, solid green background.
   # inference_prompt: "A blue Turtwig eating a burger"
   inference_steps: 50       # DDIM steps for in-training inference
+  cfg_dropout_prob: 0.1   # Fraction of samples trained without text conditioning (for CFG)
 
 general:
   is_video: False           # Explicitly set for conditional logic

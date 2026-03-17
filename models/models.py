@@ -169,6 +169,23 @@ class LatentDiffusion(nn.Module):
         return latents.float(), text_embeds
 
     def forward(self, latents: Tensor, text_embeds: dict) -> Tensor:
+        if self.training:
+            cfg_p = getattr(self.config.training, 'cfg_dropout_prob', 0.0)
+            if cfg_p > 0.0:
+                null = self.encode_text([""] * latents.shape[0], latents.device)
+                mask = torch.rand(latents.shape[0], device=latents.device) < cfg_p
+                text_embeds = {
+                    "hidden_states": torch.where(
+                        mask[:, None, None],
+                        null["hidden_states"],
+                        text_embeds["hidden_states"]
+                    ),
+                    "attention_mask": torch.where(
+                        mask[:, None],
+                        null["attention_mask"],
+                        text_embeds["attention_mask"]
+                    ),
+                }
         loss = self.engine.compute_loss(self.transformer, latents, text_embeds)
         return loss
 

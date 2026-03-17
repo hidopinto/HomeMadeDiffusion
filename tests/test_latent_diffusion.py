@@ -79,6 +79,7 @@ def _make_latent_diffusion(device: str) -> LatentDiffusion:
     config = MagicMock()
     config.dit.in_channels = _IN_CH
     config.dit.vae_scale_factor = 0.18215
+    config.training.cfg_dropout_prob = 0.0
     return LatentDiffusion(
         config=config,
         dit_model=dit,
