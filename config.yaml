@@ -25,6 +25,12 @@ training:
   gradient_checkpointing: True
   use_reentrant: False
   batch_size: 8
+  sampler: "ddim"           # "ddim" or "ddpm"
+  save_every: 5             # Save checkpoint every N epochs
+  checkpoint_dir: "checkpoints"
+  inference_every: null     # Run inference every N epochs; null = disabled
+  inference_prompt: "a cute pokemon"
+  inference_steps: 50       # DDIM steps for in-training inference
 
 general:
   is_video: False           # Explicitly set for conditional logic

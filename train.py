@@ -2,37 +2,16 @@ import huggingface_hub
 import torch
 import weave
 import wandb
-import yaml
-from box import Box
-from diffusers import AutoencoderKL
 from dotenv import load_dotenv
-from transformers import CLIPModel, CLIPTokenizer
 from torch.optim import AdamW
 
 from trainer import DiTTrainer
-from models import DiT, LatentDiffusion, SinCosPosEmbed2D, Attention, AdaLNZeroStrategy, SinCosPosEmbed3D, AdaLNTextProjector
-from diffusion_engine import DiffusionEngine, DDPM
+from model_builder import build_model
+from utils import load_config
 from data import build_dataloader
 
 
-def load_config(config_path="config.yaml"):
-    with open(config_path, "r") as f:
-        return Box(yaml.safe_load(f))
-
-
-def load_frozen_models(config, device):
-    # SDXL VAE is generally preferred for its improved latent space
-    vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
-
-    # CLIP Text Encoder (Standard for most DiT/Stable Diffusion research)
-    tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
-    text_encoder = clip.text_model
-
-    return vae.to(device), text_encoder.to(device), tokenizer
-
-
-def main():
+def main() -> None:
     load_dotenv()
     huggingface_hub.login()
     wandb.login()
@@ -42,57 +21,16 @@ def main():
     weave.init(config.general.wnb_project_name)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # 1. Load Frozen Giants
-    vae, text_encoder, tokenizer = load_frozen_models(config, device)
+    # 1. Build model (frozen giants + DiT + diffusion engine)
+    model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
 
-    # 2. Setup the "Math"
-    method = DDPM(learn_variance=config.dit.learn_variance)
-    engine = DiffusionEngine(method=method)
-
-    # 3. Setup 2D Positional Strategy
-    latent_size = config.dit.input_size
-    patch_size = config.dit.patch_size[-1]  # Takes '2' from [2, 2]
-    grid_size = latent_size // patch_size
-
-    if config.general.is_video:
-        pos_embedder = SinCosPosEmbed3D(hidden_size=config.dit.hidden_size, grid_size=grid_size, max_frames=config.dit.max_frames)
-    else:
-        pos_embedder = SinCosPosEmbed2D(hidden_size=config.dit.hidden_size, grid_size=grid_size)
-
-    text_projector = AdaLNTextProjector(
-        cond_dim=config.dit.cond_dim,
-        hidden_size=config.dit.hidden_size,
-    )
-
-    model_core = DiT(
-        is_video=config.general.is_video,
-        input_size=config.dit.input_size,
-        patch_size=config.dit.patch_size,
-        in_channels=config.dit.in_channels,
-        hidden_size=config.dit.hidden_size,
-        text_projector=text_projector,
-        frequency_embedding_size=config.dit.frequency_embedding_size,
-        max_period=config.dit.max_period,
-        depth=config.dit.depth,
-        num_heads=config.dit.num_heads,
-        pos_embedder=pos_embedder,
-        processor_class=Attention,
-        conditioner_class=AdaLNZeroStrategy,
-        learn_variance=config.dit.learn_variance,
-        gradient_checkpointing=config.training.gradient_checkpointing,
-        use_reentrant=config.training.use_reentrant,
-    )
-
-    # Wrap in LatentDiffusion
-    model = LatentDiffusion(config=config, dit_model=model_core, vae=vae, text_encoder=text_encoder, tokenizer=tokenizer, engine=engine)
-
-    # 4. Optimizer & Scheduler
+    # 2. Optimizer
     optimizer = AdamW(model.transformer.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)
 
-    # 5. Build cached dataloader (encodes once, reuses on subsequent runs)
-    dataloader = build_dataloader(config, vae, tokenizer, text_encoder, device)
+    # 3. Build cached dataloader (encodes once, reuses on subsequent runs)
+    dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
 
-    # 6. Execute
+    # 4. Execute
     trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=None)
     trainer.fit(epochs=config.training.epochs)
 

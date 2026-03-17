@@ -171,3 +171,54 @@ class LatentDiffusion(nn.Module):
     def forward(self, latents: Tensor, text_embeds: dict) -> Tensor:
         loss = self.engine.compute_loss(self.transformer, latents, text_embeds)
         return loss
+
+    @torch.no_grad()
+    def encode_text(self, prompts: list[str], device: torch.device) -> dict:
+        tokens = self.tokenizer(
+            prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
+            truncation=True, return_tensors="pt",
+        ).to(device)
+        hidden_states = self.text_encoder(tokens.input_ids)[0]
+        return {"hidden_states": hidden_states.float(), "attention_mask": tokens.attention_mask}
+
+    def _cfg_model_fn(self, x_t: Tensor, t: Tensor, cond_embeds: dict,
+                      null_embeds: dict, guidance_scale: float) -> Tensor:
+        eps_u = self.transformer(x_t, t, null_embeds)
+        eps_c = self.transformer(x_t, t, cond_embeds)
+        if self.transformer.learn_variance:
+            eps_u, _ = torch.split(eps_u, self.config.dit.in_channels, dim=1)
+            eps_c, _ = torch.split(eps_c, self.config.dit.in_channels, dim=1)
+        return eps_u + guidance_scale * (eps_c - eps_u)
+
+    @torch.no_grad()
+    def generate(
+        self,
+        prompts: list[str],
+        height: int = 256,
+        width: int = 256,
+        num_steps: int = 50,
+        guidance_scale: float = 7.5,
+        scheduler: str = "ddim",
+        eta: float = 0.0,
+    ) -> Tensor:
+        device = next(self.transformer.parameters()).device
+        cond_embeds = self.encode_text(prompts, device)
+        null_embeds = self.encode_text([""] * len(prompts), device)
+
+        model_kwargs = {
+            "cond_embeds": cond_embeds,
+            "null_embeds": null_embeds,
+            "guidance_scale": guidance_scale,
+        }
+
+        h_lat, w_lat = height // 8, width // 8
+        shape = (len(prompts), self.config.dit.in_channels, h_lat, w_lat)
+        latents = self.engine.sample(
+            self._cfg_model_fn, shape, device,
+            num_steps=num_steps, scheduler=scheduler, eta=eta,
+            model_kwargs=model_kwargs,
+        )
+
+        latents = latents / self.config.dit.vae_scale_factor
+        images = self.vae.decode(latents.to(self.vae.dtype)).sample
+        return (images.clamp(-1.0, 1.0) + 1.0) / 2.0

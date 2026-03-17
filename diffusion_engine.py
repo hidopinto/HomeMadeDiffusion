@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import torch
-from torch import nn
+from torch import nn, Tensor
 import torch.nn.functional as F
 
 
@@ -17,6 +19,7 @@ class DDPM(nn.Module):
         one_minus_alphas_cumprod = 1.0 - alphas_cumprod
         one_minus_alphas_cumprod_safe = torch.clamp(one_minus_alphas_cumprod, min=1e-12)
 
+        self.register_buffer('alphas_cumprod', alphas_cumprod.float())
         self.register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod).float())
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(one_minus_alphas_cumprod).float())
 
@@ -81,17 +84,18 @@ class DDPM(nn.Module):
 
 
 class DiffusionEngine(nn.Module):
-    def __init__(self, method):
+    def __init__(self, method: DDPM, sampler) -> None:
         super().__init__()
-        self.method = method  # This is now an object (e.g., DDPM())
+        self.method = method
+        self.sampler = sampler
 
-    def compute_loss(self, model, x_0, cond):
-        # The engine doesn't know HOW to sample or HOW to calc loss.
-        # It just manages the execution.
+    def compute_loss(self, model: nn.Module, x_0: Tensor, cond: dict) -> Tensor:
         t = self.method.sample_timesteps(x_0.shape[0], x_0.device)
         noise = torch.randn_like(x_0)
-
         x_t = self.method.q_sample(x_0, t, noise)
         model_output = model(x_t, t, cond)
-
         return self.method.loss(model, x_0, x_t, t, model_output, noise)
+
+    def sample(self, model_fn: callable, shape: tuple, device: torch.device, **kwargs) -> Tensor:
+        kwargs.pop("scheduler", None)  # sampler is chosen at build time
+        return self.sampler.sample_loop(model_fn, shape, device, **kwargs)

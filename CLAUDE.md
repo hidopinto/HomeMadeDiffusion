@@ -35,6 +35,7 @@ No formal test suite exists — `scripts/validate_shapes.py` is the primary corr
 - **Rules**: Use `einops` for tensor manipulation; avoid `view`/`reshape`.
 - **Types**: Mandatory Type Hints for all PyTorch modules.
 - **Planning**: For any multi-file change, ask for a `/plan` first.
+- **No nested functions**: Never define a function inside another function. Use class methods, `functools.partial`, or `model_kwargs` dicts to pass context instead.
 
 ## Architecture
 
