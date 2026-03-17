@@ -77,8 +77,8 @@ def _make_3d_dit(device: str) -> DiT:
     ).to(device)
 
 
-def _make_engine() -> DiffusionEngine:
-    ddpm = DDPM(num_timesteps=_NUM_STEPS, learn_variance=False)
+def _make_engine(device: str) -> DiffusionEngine:
+    ddpm = DDPM(num_timesteps=_NUM_STEPS, learn_variance=False).to(device)
     return DiffusionEngine(method=ddpm, sampler=DDIMSampler(ddpm))
 
 
@@ -94,7 +94,7 @@ def _make_cond(B: int, device: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _run_overfit(model: DiT, x_0: torch.Tensor, cond: dict, device: str) -> None:
-    engine = _make_engine()
+    engine = _make_engine(device)
     optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
 
     model.train()

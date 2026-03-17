@@ -1,4 +1,8 @@
-"""Noise schedule and loss tests for DDPM."""
+"""Noise schedule and loss tests for DDPM.
+
+DDPM buffers live on CPU by default; keep all tensors on CPU here so there is
+no device mismatch.  GPU-path is exercised indirectly via the overfit tests.
+"""
 
 import torch
 
@@ -6,27 +10,28 @@ import torch
 _B = 2
 _C = 4
 _H = _W = 16
+_CPU = "cpu"
 
 
-def _latents(device: str) -> torch.Tensor:
-    return torch.randn(_B, _C, _H, _W, device=device)
+def _latents() -> torch.Tensor:
+    return torch.randn(_B, _C, _H, _W)
 
 
 # ---------------------------------------------------------------------------
 # q_sample
 # ---------------------------------------------------------------------------
 
-def test_q_sample_shape(ddpm, device):
-    x0 = _latents(device)
+def test_q_sample_shape(ddpm):
+    x0 = _latents()
     t = torch.randint(0, ddpm.num_timesteps, (_B,))
     noise = torch.randn_like(x0)
     xt = ddpm.q_sample(x0, t, noise)
     assert xt.shape == x0.shape
 
 
-def test_q_sample_identity_at_t0(ddpm, device):
+def test_q_sample_identity_at_t0(ddpm):
     """At t=0 the forward diffusion adds almost no noise."""
-    x0 = _latents(device)
+    x0 = _latents()
     t = torch.zeros(_B, dtype=torch.long)
     noise = torch.zeros_like(x0)
     xt = ddpm.q_sample(x0, t, noise)
@@ -38,8 +43,8 @@ def test_q_sample_identity_at_t0(ddpm, device):
 # sample_timesteps
 # ---------------------------------------------------------------------------
 
-def test_sample_timesteps_range(ddpm, device):
-    t = ddpm.sample_timesteps(_B, device)
+def test_sample_timesteps_range(ddpm):
+    t = ddpm.sample_timesteps(_B, _CPU)
     assert t.shape == (_B,)
     assert t.min() >= 0
     assert t.max() < ddpm.num_timesteps
@@ -49,12 +54,11 @@ def test_sample_timesteps_range(ddpm, device):
 # loss (no variance)
 # ---------------------------------------------------------------------------
 
-def test_loss_no_variance(ddpm, device):
-    x0 = _latents(device)
+def test_loss_no_variance(ddpm):
+    x0 = _latents()
     t = torch.randint(0, ddpm.num_timesteps, (_B,))
     noise = torch.randn_like(x0)
     xt = ddpm.q_sample(x0, t, noise)
-    # model_output has the same shape as noise (no variance doubling)
     model_output = torch.randn_like(noise)
     loss = ddpm.loss(model=None, x_0=x0, x_t=xt, t=t, model_output=model_output, noise=noise)
     assert loss.shape == ()
@@ -65,13 +69,13 @@ def test_loss_no_variance(ddpm, device):
 # loss (with variance)
 # ---------------------------------------------------------------------------
 
-def test_loss_with_variance(ddpm_with_variance, device):
-    x0 = _latents(device)
+def test_loss_with_variance(ddpm_with_variance):
+    x0 = _latents()
     t = torch.randint(0, ddpm_with_variance.num_timesteps, (_B,))
     noise = torch.randn_like(x0)
     xt = ddpm_with_variance.q_sample(x0, t, noise)
     # model_output has 2× channels: noise + var_v
-    model_output = torch.randn(_B, 2 * _C, _H, _W, device=device)
+    model_output = torch.randn(_B, 2 * _C, _H, _W)
     loss = ddpm_with_variance.loss(
         model=None, x_0=x0, x_t=xt, t=t, model_output=model_output, noise=noise
     )
@@ -83,8 +87,8 @@ def test_loss_with_variance(ddpm_with_variance, device):
 # calc_vlb_loss
 # ---------------------------------------------------------------------------
 
-def test_vlb_loss_shape(ddpm_with_variance, device):
-    x0 = _latents(device)
+def test_vlb_loss_shape(ddpm_with_variance):
+    x0 = _latents()
     t = torch.randint(0, ddpm_with_variance.num_timesteps, (_B,))
     noise = torch.randn_like(x0)
     xt = ddpm_with_variance.q_sample(x0, t, noise)
