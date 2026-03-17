@@ -220,3 +220,6 @@ cache/
 
 # Weights and Biases
 wandb
+
+# Model checkpoints
+checkpoints/
