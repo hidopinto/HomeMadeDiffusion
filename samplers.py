@@ -34,7 +34,6 @@ class DDPMSampler:
 
         x_0_pred = (x_t - self.schedule.sqrt_one_minus_alphas_cumprod[t_idx] * eps) \
                    / self.schedule.sqrt_alphas_cumprod[t_idx]
-        x_0_pred = x_0_pred.clamp(-1.0, 1.0)
 
         mean = (self.schedule.posterior_mean_coef1[t_idx] * x_0_pred
                 + self.schedule.posterior_mean_coef2[t_idx] * x_t)
@@ -73,7 +72,6 @@ class DDIMSampler:
                       else torch.ones(1, device=x_t.device))
 
         x_0_pred = (x_t - (1 - alpha_t).sqrt() * eps) / alpha_t.sqrt()
-        x_0_pred = x_0_pred.clamp(-1.0, 1.0)
 
         sigma = eta * ((1 - alpha_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_prev)).sqrt()
         noise = torch.randn_like(x_t) if t_prev_idx >= 0 else torch.zeros_like(x_t)

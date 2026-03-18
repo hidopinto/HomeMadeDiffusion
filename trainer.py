@@ -111,8 +111,11 @@ class DiTTrainer:
                     [inference_prompt],
                     num_steps=inference_steps,
                 )
+                img_tensor = images[0].detach().cpu().to(torch.float32)
+                caption = f"Epoch {epoch + 1}"
+
                 self.accelerator.log({
-                    "inference/images": wandb.Image(images[0].detach().cpu().to(torch.float32)),
+                    "inference/images": wandb.Image(img_tensor, caption=caption),
                     "inference/epoch": epoch + 1,
                 }, step=global_step)
                 unwrapped.transformer.train()
