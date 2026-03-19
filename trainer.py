@@ -86,8 +86,8 @@ class DiTTrainer:
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         self.accelerator.log({"model/num_params": num_params})
 
-        save_every = getattr(self.config.training, "save_every", None)
-        infer_every = getattr(self.config.training, "inference_every", None)
+        save_every_steps = getattr(self.config.training, "save_every_steps", None)
+        infer_every_steps = getattr(self.config.training, "inference_every_steps", None)
         checkpoint_dir = getattr(self.config.training, "checkpoint_dir", "checkpoints")
 
         global_step = 0
@@ -113,6 +113,30 @@ class DiTTrainer:
                         **grad_log,
                     }, step=global_step)
 
+                    if save_every_steps and global_step % save_every_steps == 0:
+                        self.accelerator.wait_for_everyone()
+                        unwrapped = self.accelerator.unwrap_model(self.model)
+                        path = Path(checkpoint_dir) / f"dit_step{global_step:07d}.pt"
+                        self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
+
+                    if infer_every_steps and global_step % infer_every_steps == 0:
+                        unwrapped = self.accelerator.unwrap_model(self.model)
+                        unwrapped.transformer.eval()
+                        inference_prompt = getattr(self.config.training, "inference_prompt", "a photo")
+                        inference_steps = getattr(self.config.training, "inference_steps", 50)
+                        images = unwrapped.generate(
+                            [inference_prompt],
+                            num_steps=inference_steps,
+                        )
+                        img_tensor = images[0].detach().cpu().to(torch.float32)
+                        caption = f"Step {global_step}"
+
+                        self.accelerator.log({
+                            "inference/images": wandb.Image(img_tensor, caption=caption),
+                            "inference/step": global_step,
+                        }, step=global_step)
+                        unwrapped.transformer.train()
+
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0
             mean_loss = epoch_loss / epoch_steps if epoch_steps > 0 else 0.0
@@ -122,29 +146,5 @@ class DiTTrainer:
                 "train/epoch": epoch + 1,
                 "train/samples_per_sec": samples_per_sec,
             }, step=global_step)
-
-            if epoch_steps > 0 and save_every and (epoch + 1) % save_every == 0:
-                self.accelerator.wait_for_everyone()
-                unwrapped = self.accelerator.unwrap_model(self.model)
-                path = Path(checkpoint_dir) / f"dit_epoch{epoch + 1:04d}.pt"
-                self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
-
-            if infer_every and (epoch + 1) % infer_every == 0:
-                unwrapped = self.accelerator.unwrap_model(self.model)
-                unwrapped.transformer.eval()
-                inference_prompt = getattr(self.config.training, "inference_prompt", "a photo")
-                inference_steps = getattr(self.config.training, "inference_steps", 50)
-                images = unwrapped.generate(
-                    [inference_prompt],
-                    num_steps=inference_steps,
-                )
-                img_tensor = images[0].detach().cpu().to(torch.float32)
-                caption = f"Epoch {epoch + 1}"
-
-                self.accelerator.log({
-                    "inference/images": wandb.Image(img_tensor, caption=caption),
-                    "inference/epoch": epoch + 1,
-                }, step=global_step)
-                unwrapped.transformer.train()
 
         self.accelerator.end_training()
