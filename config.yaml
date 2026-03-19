@@ -36,9 +36,7 @@ training:
   save_every: 5             # Save checkpoint every N epochs
   checkpoint_dir: "checkpoints"
   inference_every: 1     # Run inference every N epochs; null = disabled
-  inference_prompt: "A cute pokemon"
-  # inference_prompt: A blue Turtwig standing on a wooden table, solid green background.
-  # inference_prompt: "A blue Turtwig eating a burger"
+  inference_prompt: "A runner with a green shirt, with a beautiful mountains view."
   inference_steps: 50       # DDIM steps for in-training inference
   cfg_dropout_prob: 0.1   # Fraction of samples trained without text conditioning (for CFG)
 
@@ -48,7 +46,7 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
-  dataset_name: "diffusers/pokemon-gpt4-captions"
+  dataset_name: "JotDe/mscoco_100k"
   split: "train"
   image_size: 256
   image_key: "image"
