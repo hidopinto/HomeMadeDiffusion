@@ -32,8 +32,8 @@ training:
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 16
-  gradient_accumulation_steps: 8
+  batch_size: 128
+  gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 1000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "checkpoints"
