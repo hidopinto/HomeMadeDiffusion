@@ -15,7 +15,8 @@ class DiTTrainer:
 
         self.accelerator = Accelerator(
             mixed_precision=config.training.mixed_precision,
-            log_with="wandb"
+            gradient_accumulation_steps=getattr(config.training, "gradient_accumulation_steps", 1),
+            log_with="wandb",
         )
         self.model = model
         if config.training.gradient_checkpointing:
@@ -35,41 +36,45 @@ class DiTTrainer:
     def train_step(self, batch: dict) -> tuple[torch.Tensor, dict]:
         latents = batch["latent"]
         text_embeds = batch["text_embed"]
+        grad_log: dict[str, float] = {}
         with self.accelerator.accumulate(self.model):
-            self.optimizer.zero_grad()
             loss = self.model(latents, text_embeds)
             self.accelerator.backward(loss)
 
-            unwrapped = self.accelerator.unwrap_model(self.model)
-            transformer = unwrapped.transformer
+            if self.accelerator.sync_gradients:
+                clip_norm = getattr(self.config.training, "gradient_clip_norm", None)
+                if clip_norm is not None:
+                    self.accelerator.clip_grad_norm_(self.model.parameters(), clip_norm)
 
-            grad_log: dict[str, float] = {}
+                unwrapped = self.accelerator.unwrap_model(self.model)
+                transformer = unwrapped.transformer
 
-            for i, block in enumerate(transformer.blocks):
-                norm_sq = sum(
-                    p.grad.data.norm(2).item() ** 2
-                    for p in block.parameters() if p.grad is not None
-                )
-                grad_log[f"grad_norm/block_{i:02d}"] = norm_sq ** 0.5
+                for i, block in enumerate(transformer.blocks):
+                    norm_sq = sum(
+                        p.grad.data.norm(2).item() ** 2
+                        for p in block.parameters() if p.grad is not None
+                    )
+                    grad_log[f"grad_norm/block_{i:02d}"] = norm_sq ** 0.5
 
-            for name, module in [
-                ("patch_embed", transformer.patch_embed),
-                ("t_embedder", transformer.t_embedder),
-                ("text_projector", transformer.text_projector),
-                ("final_layer", transformer.final_layer),
-            ]:
-                norm_sq = sum(
-                    p.grad.data.norm(2).item() ** 2
-                    for p in module.parameters() if p.grad is not None
-                )
-                grad_log[f"grad_norm/{name}"] = norm_sq ** 0.5
+                for name, module in [
+                    ("patch_embed", transformer.patch_embed),
+                    ("t_embedder", transformer.t_embedder),
+                    ("text_projector", transformer.text_projector),
+                    ("final_layer", transformer.final_layer),
+                ]:
+                    norm_sq = sum(
+                        p.grad.data.norm(2).item() ** 2
+                        for p in module.parameters() if p.grad is not None
+                    )
+                    grad_log[f"grad_norm/{name}"] = norm_sq ** 0.5
 
-            grad_norm = sum(v ** 2 for v in grad_log.values()) ** 0.5
-            grad_log["train/grad_norm"] = grad_norm
+                grad_norm = sum(v ** 2 for v in grad_log.values()) ** 0.5
+                grad_log["train/grad_norm"] = grad_norm
 
             self.optimizer.step()
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
+            self.optimizer.zero_grad()
         return loss, grad_log
 
     def fit(self, epochs: int) -> None:
@@ -98,14 +103,15 @@ class DiTTrainer:
                 loss_val = loss.item()
                 epoch_loss += loss_val
                 epoch_steps += 1
-                global_step += 1
 
-                current_lr = self.optimizer.param_groups[0]["lr"]
-                self.accelerator.log({
-                    "train/loss": loss_val,
-                    "train/lr": current_lr,
-                    **grad_log,
-                }, step=global_step)
+                if self.accelerator.sync_gradients:
+                    global_step += 1
+                    current_lr = self.optimizer.param_groups[0]["lr"]
+                    self.accelerator.log({
+                        "train/loss": loss_val,
+                        "train/lr": current_lr,
+                        **grad_log,
+                    }, step=global_step)
 
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0

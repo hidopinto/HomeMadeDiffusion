@@ -30,6 +30,12 @@ def main() -> None:
     # 3. Build cached dataloader (encodes once, reuses on subsequent runs)
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
 
+    # 3a. Cache null text embedding before offloading frozen models
+    model.cache_null_embed(torch.device(device))
+    model.vae = model.vae.cpu()
+    model.text_encoder = model.text_encoder.cpu()
+    torch.cuda.empty_cache()
+
     # 4. Execute
     trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=None)
     trainer.fit(epochs=config.training.epochs)

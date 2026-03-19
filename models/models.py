@@ -142,6 +142,9 @@ class LatentDiffusion(nn.Module):
         self.tokenizer = tokenizer
         self.engine = engine  # This replaces 'scheduler' for training logic
 
+        self._null_hidden_states: torch.Tensor | None = None
+        self._null_attention_mask: torch.Tensor | None = None
+
         # Freeze the giants
         self.vae.eval().requires_grad_(False)
         self.text_encoder.eval().requires_grad_(False)
@@ -168,11 +171,24 @@ class LatentDiffusion(nn.Module):
 
         return latents.float(), text_embeds
 
+    @torch.no_grad()
+    def cache_null_embed(self, device: torch.device) -> None:
+        null = self.encode_text([""], device)
+        self._null_hidden_states = null["hidden_states"].detach()
+        self._null_attention_mask = null["attention_mask"].detach()
+
+    def _get_null_embed(self, batch_size: int, device: torch.device) -> dict:
+        assert self._null_hidden_states is not None, "Call cache_null_embed() before training"
+        return {
+            "hidden_states": self._null_hidden_states.expand(batch_size, -1, -1).to(device),
+            "attention_mask": self._null_attention_mask.expand(batch_size, -1).to(device),
+        }
+
     def forward(self, latents: Tensor, text_embeds: dict) -> Tensor:
         if self.training:
             cfg_p = getattr(self.config.training, 'cfg_dropout_prob', 0.0)
             if cfg_p > 0.0:
-                null = self.encode_text([""] * latents.shape[0], latents.device)
+                null = self._get_null_embed(latents.shape[0], latents.device)
                 mask = torch.rand(latents.shape[0], device=latents.device) < cfg_p
                 text_embeds = {
                     "hidden_states": torch.where(
