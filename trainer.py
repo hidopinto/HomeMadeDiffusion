@@ -122,13 +122,21 @@ class DiTTrainer:
                     if infer_every_steps and global_step % infer_every_steps == 0:
                         unwrapped = self.accelerator.unwrap_model(self.model)
                         unwrapped.transformer.eval()
-                        inference_prompt = getattr(self.config.training, "inference_prompt", "a photo")
-                        inference_steps = getattr(self.config.training, "inference_steps", 50)
-                        guidance_scale = getattr(self.config.training, "guidance_scale", 7.5)
+                        inference_prompt    = getattr(self.config.training, "inference_prompt")
+                        inference_steps     = getattr(self.config.training, "inference_steps", 50)
+                        guidance_scale      = getattr(self.config.training, "guidance_scale", 7.5)
+                        inference_height    = getattr(self.config.training, "inference_height", 512)
+                        inference_width     = getattr(self.config.training, "inference_width", 512)
+                        inference_eta       = getattr(self.config.training, "inference_eta", 0.0)
+                        inference_scheduler = getattr(self.config.diffusion, "sampler", "ddim")
                         images = unwrapped.generate(
                             [inference_prompt],
+                            height=inference_height,
+                            width=inference_width,
                             num_steps=inference_steps,
                             guidance_scale=guidance_scale,
+                            scheduler=inference_scheduler,
+                            eta=inference_eta,
                         )
                         img_tensor = images[0].detach().cpu().to(torch.float32)
                         caption = f"Step {global_step}"

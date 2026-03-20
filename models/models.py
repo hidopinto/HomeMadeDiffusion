@@ -232,8 +232,8 @@ class LatentDiffusion(nn.Module):
     def generate(
         self,
         prompts: list[str],
-        height: int = 256,
-        width: int = 256,
+        height: int = 512,
+        width: int = 512,
         num_steps: int = 50,
         guidance_scale: float = 7.5,
         scheduler: str = "ddim",
