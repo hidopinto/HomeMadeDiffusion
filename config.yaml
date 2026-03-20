@@ -40,6 +40,7 @@ training:
   inference_every_steps: 500  # Run inference every N optimizer steps; null = disabled
   inference_prompt: "A runner with a green shirt, with a beautiful mountains view."
   inference_steps: 50       # DDIM steps for in-training inference
+  guidance_scale: 7.5      # CFG scale used during in-training inference
   cfg_dropout_prob: 0.1   # Fraction of samples trained without text conditioning (for CFG)
 
 general:

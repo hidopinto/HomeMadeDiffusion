@@ -124,9 +124,11 @@ class DiTTrainer:
                         unwrapped.transformer.eval()
                         inference_prompt = getattr(self.config.training, "inference_prompt", "a photo")
                         inference_steps = getattr(self.config.training, "inference_steps", 50)
+                        guidance_scale = getattr(self.config.training, "guidance_scale", 7.5)
                         images = unwrapped.generate(
                             [inference_prompt],
                             num_steps=inference_steps,
+                            guidance_scale=guidance_scale,
                         )
                         img_tensor = images[0].detach().cpu().to(torch.float32)
                         caption = f"Step {global_step}"
