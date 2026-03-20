@@ -1,14 +1,56 @@
+import math
+from functools import partial
+
 import huggingface_hub
 import torch
 import weave
 import wandb
 from dotenv import load_dotenv
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
+from transformers import get_scheduler
 
 from trainer import DiTTrainer
 from model_builder import build_model
 from utils import load_config
 from data import build_dataloader
+
+
+def _cosine_lr_lambda(
+    current_step: int,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    lr_end_ratio: float,
+) -> float:
+    if current_step < num_warmup_steps:
+        return float(current_step) / float(max(1, num_warmup_steps))
+    progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+    return lr_end_ratio + (1.0 - lr_end_ratio) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def build_lr_scheduler(
+    scheduler_name: str,
+    optimizer: torch.optim.Optimizer,
+    num_warmup_steps: int,
+    num_training_steps: int,
+    lr_peak: float,
+    lr_end: float,
+) -> object:
+    if scheduler_name == "cosine_with_warmup":
+        lr_lambda = partial(
+            _cosine_lr_lambda,
+            num_warmup_steps=num_warmup_steps,
+            num_training_steps=num_training_steps,
+            lr_end_ratio=lr_end / lr_peak,
+        )
+        return LambdaLR(optimizer, lr_lambda)
+
+    return get_scheduler(
+        name=scheduler_name,
+        optimizer=optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=num_training_steps,
+    )
 
 
 def main() -> None:
@@ -36,8 +78,22 @@ def main() -> None:
     model.text_encoder = model.text_encoder.cpu()
     torch.cuda.empty_cache()
 
-    # 4. Execute
-    trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=None)
+    # 4. Build LR scheduler
+    grad_accum_steps: int = getattr(config.training, "gradient_accumulation_steps", 1)
+    total_training_steps: int = (len(dataloader) // grad_accum_steps) * config.training.epochs
+    num_warmup_steps: int = round(config.training.warmup_ratio * total_training_steps)
+
+    lr_scheduler = build_lr_scheduler(
+        scheduler_name=config.training.lr_scheduler,
+        optimizer=optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=total_training_steps,
+        lr_peak=config.training.lr,
+        lr_end=config.training.lr_end,
+    )
+
+    # 5. Execute
+    trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=lr_scheduler)
     trainer.fit(epochs=config.training.epochs)
 
 
