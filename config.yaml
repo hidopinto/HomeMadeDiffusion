@@ -54,7 +54,7 @@ general:
 data:
   dataset_name: "JotDe/mscoco_100k"
   split: "train"
-  image_size: 256
+  image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
   image_key: "image"
   caption_key: "text"
   cache_dir: "cache"
