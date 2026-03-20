@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-gnome-session-inhibit \
-  --inhibit suspend:idle \
-  --reason "ML training in progress" \
-  systemd-inhibit \
+set -e
+
+systemd-inhibit \
     --what=sleep:idle \
     --who="DiT Training" \
     --why="ML training in progress" \
+    --mode=block \
     /home/hido-pinto/PycharmProjects/Diffusion/.venv/bin/python train.py "$@"
