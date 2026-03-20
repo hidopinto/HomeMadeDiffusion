@@ -61,7 +61,7 @@ def main() -> None:
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     for i, img_tensor in enumerate(images):
         out_path = Path(args.out_dir) / f"sample_{i:04d}.{args.format}"
-        to_pil_image(img_tensor.cpu()).save(out_path)
+        to_pil_image(img_tensor.cpu().float()).save(out_path)
         print(f"Saved {out_path}")
 
     if collector is not None and collector.decoded_images:
@@ -70,7 +70,7 @@ def main() -> None:
         for step_idx, img_batch in zip(collector.step_indices, collector.decoded_images):
             for prompt_i, img_tensor in enumerate(img_batch):
                 out_path = inter_dir / f"sample_{prompt_i:04d}_step{step_idx:04d}.{args.format}"
-                to_pil_image(img_tensor.cpu()).save(out_path)
+                to_pil_image(img_tensor.cpu().float()).save(out_path)
 
     if args.wandb:
         import wandb

@@ -223,3 +223,6 @@ wandb
 
 # Model checkpoints
 checkpoints/
+
+# Model outputs
+outputs/

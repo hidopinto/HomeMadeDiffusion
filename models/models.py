@@ -211,7 +211,7 @@ class LatentDiffusion(nn.Module):
             prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
             truncation=True, return_tensors="pt",
         ).to(device)
-        hidden_states = self.text_encoder(tokens.input_ids)[0]
+        hidden_states = self.text_encoder(tokens.input_ids.to(device))[0]
         return {"hidden_states": hidden_states.float(), "attention_mask": tokens.attention_mask}
 
     def _cfg_model_fn(self, x_t: Tensor, t: Tensor, cond_embeds: dict,

@@ -69,4 +69,4 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
     )
-    return LatentDiffusion(config, model_core, vae, text_encoder, tokenizer, engine)
+    return LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer, engine)
