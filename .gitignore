@@ -221,8 +221,8 @@ cache/
 # Weights and Biases
 wandb
 
-# Model checkpoints
-checkpoints/
+# Model small_model_checkpoints
+*checkpoints/
 
 # Model outputs
-outputs/
+*outputs/

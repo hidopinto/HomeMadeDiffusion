@@ -1,4 +1,4 @@
 # Binary latent cache — not source code, wastes context window tokens
 cache/
-checkpoints/
-outputs/
+*checkpoints/
+*outputs/
