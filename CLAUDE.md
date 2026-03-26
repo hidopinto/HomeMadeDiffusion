@@ -41,7 +41,8 @@ Tests live in `tests/` and use a tiny config (hidden_size=128, depth=2, 16×16 l
 |------|----------|
 | `tests/test_dit.py` | DiT forward shapes, PatchEmbed, FinalLayer, AdaLN, positional embedders, timestep embedder |
 | `tests/test_ddpm.py` | Noise schedule, q_sample, loss (MSE + VLB) |
-| `tests/test_samplers.py` | DDPM and DDIM step shapes, loop output, DDIM determinism |
+| `tests/test_samplers.py` | DDPM and DDIM step shapes, loop output, DDIM determinism; FM step/loop/determinism |
+| `tests/test_flow_matching.py` | FlowMatching q_sample boundaries, interpolation, loss, OT reordering correctness |
 | `tests/test_latent_diffusion.py` | encode_text shapes, forward loss scalar, gradient presence |
 | `tests/test_overfit.py` | Gradient-flow smoke test: loss drops ≥5% in 10 steps for both 2D and 3D |
 
@@ -78,7 +79,8 @@ latents + timestep t + encoder_hidden_states
 |------|---------------|
 | `train.py` | Entry point: loads config, frozen models, wires everything together |
 | `trainer.py` | `DiTTrainer` — training loop using HuggingFace `Accelerator` (bf16, gradient checkpointing, W&B logging) |
-| `diffusion_engine.py` | `DDPM` — noise schedule, `q_sample()`, `calc_vlb_loss()`; `DiffusionEngine` wraps DDPM with DiT |
+| `diffusion_engine.py` | `DDPM` — noise schedule, `q_sample()`, `calc_vlb_loss()`; `FlowMatching` — OT conditional flow, MSE velocity loss, optional minibatch OT; `DiffusionEngine` wraps either method with DiT |
+| `samplers.py` | `DDPMSampler`, `DDIMSampler`, `FlowMatchingSampler` — Euler ODE from noise→data |
 | `models/models.py` | `DiT` — full transformer; `LatentDiffusion` — training wrapper; `DiTBlock` — AdaLN-Zero block |
 | `models/layers.py` | `PatchEmbed`, `FinalLayer`, `AdaLNZeroStrategy` |
 | `models/conditioning.py` | `TimestepEmbedder`, `SinCosPosEmbed2D`, `SinCosPosEmbed3D` |

@@ -2,8 +2,8 @@
 
 import torch
 
-from diffusion_engine import DDPM
-from samplers import DDPMSampler, DDIMSampler
+from diffusion_engine import DDPM, FlowMatching
+from samplers import DDPMSampler, DDIMSampler, FlowMatchingSampler
 
 _B = 2
 _C = 4
@@ -74,3 +74,52 @@ def test_ddim_deterministic(device):
     out2 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3, eta=0.0)
 
     assert torch.allclose(out1, out2)
+
+
+# ---------------------------------------------------------------------------
+# FlowMatchingSampler
+# ---------------------------------------------------------------------------
+
+def _fast_fm() -> FlowMatching:
+    """10-step FM schedule — sample_loop iterates 10 Euler steps."""
+    return FlowMatching(num_timesteps=10, use_minibatch_ot=False)
+
+
+def test_fm_step_shape(device):
+    """Single Euler step must preserve spatial shape."""
+    fm = _fast_fm()
+    sampler = FlowMatchingSampler(fm)
+    x = torch.randn(_shape(), device=device)
+    out = sampler._step(_model_fn, x, t_idx=3, dt=0.1)
+    assert out.shape == x.shape
+
+
+def test_fm_loop_output_shape(device):
+    """Full Euler loop must produce tensor with correct shape."""
+    fm = _fast_fm()
+    sampler = FlowMatchingSampler(fm)
+    out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+    assert out.shape == _shape()
+
+
+def test_fm_loop_deterministic(device):
+    """FM ODE has no stochastic terms — identical outputs for the same seed."""
+    fm = _fast_fm()
+    sampler = FlowMatchingSampler(fm)
+
+    torch.manual_seed(42)
+    out1 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+
+    torch.manual_seed(42)
+    out2 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+
+    assert torch.allclose(out1, out2)
+
+
+def test_fm_loop_nonzero_output(device):
+    """sample_loop output must not be all-zeros (basic sanity check)."""
+    torch.manual_seed(0)
+    fm = _fast_fm()
+    sampler = FlowMatchingSampler(fm)
+    out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3)
+    assert not torch.allclose(out, torch.zeros(_shape(), device=device))

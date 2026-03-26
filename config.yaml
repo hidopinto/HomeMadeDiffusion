@@ -12,6 +12,9 @@ diffusion:
     beta_end: 0.02
     learn_variance: True    # DDPM-specific: predict variance alongside noise (Improved DDPM)
   ddim: {}                  # Sampler sub-config placeholder
+  flow_matching:
+    num_timesteps: 1000
+    use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
 
 dit:
   input_size: 64

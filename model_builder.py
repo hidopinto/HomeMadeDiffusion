@@ -6,17 +6,19 @@ from diffusers import AutoencoderKL
 from timm.models.vision_transformer import Attention
 from transformers import CLIPModel, CLIPTokenizer
 
-from diffusion_engine import DDPM, DiffusionEngine
+from diffusion_engine import DDPM, FlowMatching, DiffusionEngine
 from models import AdaLNTextProjector, AdaLNZeroStrategy, DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D
-from samplers import DDIMSampler, DDPMSampler
+from samplers import DDIMSampler, DDPMSampler, FlowMatchingSampler
 
 METHOD_REGISTRY: dict[str, type] = {
     "ddpm": DDPM,
+    "flow_matching": FlowMatching,
 }
 
 SAMPLER_REGISTRY: dict[str, type] = {
     "ddpm": DDPMSampler,
     "ddim": DDIMSampler,
+    "flow_matching": FlowMatchingSampler,
 }
 
 
