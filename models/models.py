@@ -48,7 +48,7 @@ class DiT(nn.Module):
             pos_embedder,
             processor_class,  # e.g., Attention from timm
             conditioner_class,  # e.g., AdaLNZeroStrategy
-            learn_variance,
+            out_channels: int,
             gradient_checkpointing=False,
             use_reentrant=False
     ):
@@ -56,9 +56,9 @@ class DiT(nn.Module):
         self.is_video = is_video
         self.patch_size = patch_size
         self.in_channels = in_channels
+        self.out_channels = out_channels
         self.hidden_size = hidden_size
         self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
-        self.learn_variance = learn_variance
         self.gradient_checkpointing = gradient_checkpointing
         self.use_reentrant = use_reentrant
 
@@ -77,7 +77,7 @@ class DiT(nn.Module):
             ) for _ in range(depth)
         ])
 
-        self.final_layer = FinalLayer(hidden_size, patch_size, in_channels, learn_variance=learn_variance)
+        self.final_layer = FinalLayer(hidden_size, patch_size, out_channels)
 
     def forward(self, x, t, y: dict | None = None):
         """
@@ -111,22 +111,21 @@ class DiT(nn.Module):
         # 4. Final Projection
         x = self.final_layer(x, condition)
 
-        # 5. Unpatchify for Mean + Variance
-        v = 2 if self.learn_variance else 1
-        c = self.in_channels
+        # 5. Unpatchify
+        c = self.out_channels
 
         if self.is_video:
             p_t, p_h, p_w = self.patch_size
             f_p, h_p, w_p = orig_f // p_t, orig_h // p_h, orig_w // p_w
 
-            x = rearrange(x, 'b (f_p h_p w_p) (v c p_t p_h p_w) -> b (v c) (f_p p_t) (h_p p_h) (w_p p_w)',
-                          v=v, c=c, f_p=f_p, h_p=h_p, w_p=w_p, p_t=p_t, p_h=p_h, p_w=p_w)
+            x = rearrange(x, 'b (f_p h_p w_p) (c p_t p_h p_w) -> b c (f_p p_t) (h_p p_h) (w_p p_w)',
+                          c=c, f_p=f_p, h_p=h_p, w_p=w_p, p_t=p_t, p_h=p_h, p_w=p_w)
         else:
             p_h, p_w = self.patch_size
             h_p, w_p = orig_h // p_h, orig_w // p_w
 
-            x = rearrange(x, 'b (h_p w_p) (v c p_h p_w) -> b (v c) (h_p p_h) (w_p p_w)',
-                          v=v, c=c, h_p=h_p, w_p=w_p, p_h=p_h, p_w=p_w)
+            x = rearrange(x, 'b (h_p w_p) (c p_h p_w) -> b c (h_p p_h) (w_p p_w)',
+                          c=c, h_p=h_p, w_p=w_p, p_h=p_h, p_w=p_w)
 
         return x
 
@@ -218,9 +217,10 @@ class LatentDiffusion(nn.Module):
                       null_embeds: dict, guidance_scale: float) -> Tensor:
         eps_u = self.transformer(x_t, t, null_embeds)
         eps_c = self.transformer(x_t, t, cond_embeds)
-        if self.transformer.learn_variance:
-            eps_u, _ = torch.split(eps_u, self.config.dit.in_channels, dim=1)
-            eps_c, _ = torch.split(eps_c, self.config.dit.in_channels, dim=1)
+        in_c = self.config.dit.in_channels
+        if self.transformer.out_channels > in_c:
+            eps_u, _ = torch.split(eps_u, in_c, dim=1)
+            eps_c, _ = torch.split(eps_c, in_c, dim=1)
         return eps_u + guidance_scale * (eps_c - eps_u)
 
     def _decode_latents(self, latents: Tensor) -> Tensor:

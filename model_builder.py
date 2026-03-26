@@ -29,20 +29,16 @@ def load_frozen_models(config: Box, device: str) -> tuple:
 
 def build_model(config: Box, device: str, gradient_checkpointing: bool = False) -> LatentDiffusion:
     vae, text_encoder, tokenizer = load_frozen_models(config, device)
-    method_name = config.diffusion.method
-    method_cfg = config.diffusion[method_name]
-    method = METHOD_REGISTRY[method_name](
-        num_timesteps=method_cfg.num_timesteps,
-        learn_variance=config.dit.learn_variance,
-        beta_start=method_cfg.beta_start,
-        beta_end=method_cfg.beta_end,
-    )
 
-    sampler = SAMPLER_REGISTRY[config.diffusion.sampler](method)
-    engine = DiffusionEngine(method=method, sampler=sampler)
+    method  = METHOD_REGISTRY[config.diffusion.method].from_config(config)
+    sampler = SAMPLER_REGISTRY[config.diffusion.sampler].from_config(config, method)
+    engine  = DiffusionEngine(method=method, sampler=sampler)
+
+    in_channels  = config.dit.in_channels
+    out_channels = method.expected_out_channels(in_channels)
 
     patch_size = config.dit.patch_size[-1]
-    grid_size = config.dit.input_size // patch_size
+    grid_size  = config.dit.input_size // patch_size
 
     if config.general.is_video:
         pos_embedder = SinCosPosEmbed3D(config.dit.hidden_size, grid_size, config.dit.max_frames)
@@ -55,7 +51,8 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         is_video=config.general.is_video,
         input_size=config.dit.input_size,
         patch_size=config.dit.patch_size,
-        in_channels=config.dit.in_channels,
+        in_channels=in_channels,
+        out_channels=out_channels,
         hidden_size=config.dit.hidden_size,
         text_projector=text_projector,
         frequency_embedding_size=config.dit.frequency_embedding_size,
@@ -65,7 +62,6 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         pos_embedder=pos_embedder,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
-        learn_variance=config.dit.learn_variance,
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
     )

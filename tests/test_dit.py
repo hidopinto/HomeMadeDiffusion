@@ -65,14 +65,14 @@ def test_final_layer_shape(device):
     ph, pw = _PATCH
     layer = FinalLayer(
         hidden_size=_HIDDEN, patch_size=_PATCH,
-        out_channels=_IN_CH, learn_variance=False
+        out_channels=_IN_CH,
     ).to(device)
     N = (_INPUT // ph) * (_INPUT // pw)   # 64 tokens
     x = torch.randn(_B, N, _HIDDEN, device=device)
     cond = torch.randn(_B, _HIDDEN, device=device)
     out = layer(x, cond)
-    # v=1, out_channels=4, patch area=4 → each token predicts 16 values
-    assert out.shape == (_B, N, 1 * _IN_CH * int(np.prod(_PATCH)))
+    # out_channels=4, patch area=4 → each token predicts 16 values
+    assert out.shape == (_B, N, _IN_CH * int(np.prod(_PATCH)))
 
 
 # ---------------------------------------------------------------------------

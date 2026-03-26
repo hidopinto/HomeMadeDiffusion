@@ -66,16 +66,13 @@ class AdaLNZeroStrategy(nn.Module):
 
 
 class FinalLayer(nn.Module):
-    def __init__(self, hidden_size, patch_size, out_channels, learn_variance=True):
+    def __init__(self, hidden_size: int, patch_size, out_channels: int):
         super().__init__()
-        self.learn_sigma = learn_variance
         self.patch_size = patch_size if isinstance(patch_size, (list, tuple)) else (patch_size, patch_size)
-        # If learning sigma, we need 2x the channels (mean + variance)
         self.out_channels = out_channels
-        self.v = 2 if learn_variance else 1
 
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, self.v * out_channels * np.prod(patch_size), bias=True)
+        self.linear = nn.Linear(hidden_size, out_channels * np.prod(patch_size), bias=True)
         self.adaLN_modulation = nn.Sequential(
             nn.SiLU(),
             nn.Linear(hidden_size, 2 * hidden_size, bias=True)

@@ -39,6 +39,7 @@ def _make_2d_dit(device: str) -> DiT:
         input_size=16,
         patch_size=_PATCH_2D,
         in_channels=_IN_CH,
+        out_channels=_IN_CH,
         hidden_size=_HIDDEN,
         text_projector=txt_proj,
         frequency_embedding_size=64,
@@ -48,7 +49,6 @@ def _make_2d_dit(device: str) -> DiT:
         pos_embedder=pos_emb,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
-        learn_variance=False,
     ).to(device)
 
 
@@ -64,6 +64,7 @@ def _make_3d_dit(device: str) -> DiT:
         input_size=16,
         patch_size=_PATCH_3D,
         in_channels=_IN_CH,
+        out_channels=_IN_CH,
         hidden_size=_HIDDEN,
         text_projector=txt_proj,
         frequency_embedding_size=64,
@@ -73,7 +74,6 @@ def _make_3d_dit(device: str) -> DiT:
         pos_embedder=pos_emb,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
-        learn_variance=False,
     ).to(device)
 
 

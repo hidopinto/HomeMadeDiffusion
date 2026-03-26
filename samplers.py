@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+from box import Box
 from dataclasses import dataclass, field
 from typing import Callable
 from torch import Tensor
@@ -26,6 +27,10 @@ class DDPMSampler:
 
     def __init__(self, schedule: DDPM) -> None:
         self.schedule = schedule
+
+    @classmethod
+    def from_config(cls, config: Box, schedule: DDPM) -> "DDPMSampler":
+        return cls(schedule)
 
     def _step(self, model_fn: callable, x_t: Tensor, t_idx: int,
               model_kwargs: dict | None = None) -> Tensor:
@@ -61,6 +66,10 @@ class DDIMSampler:
 
     def __init__(self, schedule: DDPM) -> None:
         self.schedule = schedule
+
+    @classmethod
+    def from_config(cls, config: Box, schedule: DDPM) -> "DDIMSampler":
+        return cls(schedule)
 
     def _step(self, model_fn: callable, x_t: Tensor, t_idx: int, t_prev_idx: int,
               eta: float = 0.0, model_kwargs: dict | None = None) -> Tensor:

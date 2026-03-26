@@ -72,7 +72,7 @@ def text_projector(device: str) -> AdaLNTextProjector:
 # DiT model helpers
 # ---------------------------------------------------------------------------
 
-def _make_dit(device: str, learn_variance: bool) -> DiT:
+def _make_dit(device: str, out_channels: int) -> DiT:
     grid_size = INPUT_SIZE // PATCH_SIZE[0]
     pos_emb = SinCosPosEmbed2D(HIDDEN_SIZE, grid_size=grid_size).to(device)
     txt_proj = AdaLNTextProjector(cond_dim=COND_DIM, hidden_size=HIDDEN_SIZE).to(device)
@@ -81,6 +81,7 @@ def _make_dit(device: str, learn_variance: bool) -> DiT:
         input_size=INPUT_SIZE,
         patch_size=PATCH_SIZE,
         in_channels=IN_CHANNELS,
+        out_channels=out_channels,
         hidden_size=HIDDEN_SIZE,
         text_projector=txt_proj,
         frequency_embedding_size=FREQ_EMBED_SIZE,
@@ -90,18 +91,17 @@ def _make_dit(device: str, learn_variance: bool) -> DiT:
         pos_embedder=pos_emb,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
-        learn_variance=learn_variance,
     ).to(device)
 
 
 @pytest.fixture
 def dit_model(device: str) -> DiT:
-    return _make_dit(device, learn_variance=False)
+    return _make_dit(device, out_channels=IN_CHANNELS)
 
 
 @pytest.fixture
 def dit_model_with_variance(device: str) -> DiT:
-    return _make_dit(device, learn_variance=True)
+    return _make_dit(device, out_channels=2 * IN_CHANNELS)
 
 
 # ---------------------------------------------------------------------------

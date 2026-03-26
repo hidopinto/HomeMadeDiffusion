@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import torch
+from box import Box
 from torch import nn, Tensor
 import torch.nn.functional as F
 
 
 class DDPM(nn.Module):
     def __init__(self, num_timesteps=1000, learn_variance=True, beta_start=0.0001, beta_end=0.02):
-        # TODO: pass these params to conf
         super().__init__()
         self.num_timesteps = num_timesteps
         self.variance = learn_variance
@@ -34,6 +34,20 @@ class DDPM(nn.Module):
                              (betas * torch.sqrt(alphas_cumprod_prev) / one_minus_alphas_cumprod_safe).float())
         self.register_buffer('posterior_mean_coef2',
                              ((1.0 - alphas_cumprod_prev) * torch.sqrt(alphas) / one_minus_alphas_cumprod_safe).float())
+
+    @classmethod
+    def from_config(cls, config: Box) -> "DDPM":
+        cfg = config.diffusion[config.diffusion.method]
+        return cls(
+            num_timesteps=cfg.num_timesteps,
+            learn_variance=cfg.learn_variance,
+            beta_start=cfg.beta_start,
+            beta_end=cfg.beta_end,
+        )
+
+    def expected_out_channels(self, in_channels: int) -> int:
+        """Declares how many output channels the model must produce for this method."""
+        return 2 * in_channels if self.variance else in_channels
 
     def sample_timesteps(self, batch_size, device):
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
