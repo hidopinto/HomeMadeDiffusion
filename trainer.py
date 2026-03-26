@@ -86,11 +86,19 @@ class DiTTrainer:
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         self.accelerator.log({"model/num_params": num_params})
 
-        save_every_steps = getattr(self.config.training, "save_every_steps", None)
-        infer_every_steps = getattr(self.config.training, "inference_every_steps", None)
+        save_every_steps = getattr(self.config.training, "save_every_steps", False)
+        infer_every_steps = getattr(self.config.training, "inference_every_steps", False)
         checkpoint_dir = getattr(self.config.training, "checkpoint_dir", "checkpoints")
+        full_ckpt_dir = Path(checkpoint_dir) / "full_ckpt"
 
         global_step = 0
+        resume_from = getattr(self.config.training, "resume_from_checkpoint", False)
+        if resume_from and Path(resume_from).exists():
+            self.accelerator.load_state(resume_from)
+            step_file = Path(resume_from) / "step.txt"
+            if step_file.exists():
+                global_step = int(step_file.read_text().strip())
+            self.accelerator.print(f"Resumed training from step {global_step}")
 
         for epoch in range(epochs):
             self.model.train()
@@ -118,6 +126,9 @@ class DiTTrainer:
                         unwrapped = self.accelerator.unwrap_model(self.model)
                         path = Path(checkpoint_dir) / f"dit_step{global_step:07d}.pt"
                         self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
+                        self.accelerator.save_state(str(full_ckpt_dir))
+                        if self.accelerator.is_main_process:
+                            (full_ckpt_dir / "step.txt").write_text(str(global_step))
 
                     if infer_every_steps and global_step % infer_every_steps == 0:
                         unwrapped = self.accelerator.unwrap_model(self.model)

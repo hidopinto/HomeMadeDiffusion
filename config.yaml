@@ -42,10 +42,11 @@ training:
   batch_size: 160
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
-  save_every_steps: 1000    # Save checkpoint every N optimizer steps
+  save_every_steps: 5000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "checkpoints"
-  inference_every_steps: 500  # Run inference every N optimizer steps; null = disabled
-  inference_prompt: "A runner with a green shirt, with a beautiful mountains view."
+  resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
+  inference_every_steps: 500  # Run inference every N optimizer steps; False = disabled
+  inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
   inference_height: 512    # must match data.image_size
   inference_width: 512     # must match data.image_size
   inference_eta: 0.0       # DDIM stochasticity; 0 = deterministic
