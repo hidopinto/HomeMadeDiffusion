@@ -6,7 +6,7 @@ import torch
 from box import Box
 from diffusers import AutoencoderKL
 from timm.models.vision_transformer import Attention
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPModel, CLIPTextModel, CLIPTokenizer
 
 __all__ = ["load_frozen_models", "build_model", "METHOD_REGISTRY", "SAMPLER_REGISTRY"]
 
@@ -32,7 +32,9 @@ def load_frozen_models(config: Box, device: str) -> tuple[AutoencoderKL, CLIPTex
     logger.info("Loading frozen models (VAE + CLIP text encoder)...")
     vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
+    _clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
+    text_encoder = _clip.text_model
+    del _clip.vision_model
     logger.info("Frozen models loaded.")
     return vae.to(device), text_encoder.to(device), tokenizer
 
