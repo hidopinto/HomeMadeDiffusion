@@ -34,7 +34,7 @@ dit:
   vae_scale_factor: 0.18215 # SDXL Standard
 
 training:
-  epochs: 160
+  epochs: 500
   lr: 3.5e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
   warmup_ratio: 0.02                  # fraction of total optimizer steps for warmup (ignored by "constant")
