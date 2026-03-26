@@ -56,4 +56,5 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
         shuffle=True,
         num_workers=config.data.num_workers,
         pin_memory=True,
+        persistent_workers=True,
     )
