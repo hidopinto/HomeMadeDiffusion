@@ -41,7 +41,7 @@ training:
   lr_end: 1.0e-6              # The floor of the cosine decay
   weight_decay: 0.03
   mixed_precision: "bf16"   # Best for RTX 3090
-  gradient_checkpointing: False
+  gradient_checkpointing: True
   use_reentrant: False
   batch_size: 128
   gradient_accumulation_steps: 1
