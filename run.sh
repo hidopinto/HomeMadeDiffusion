@@ -6,4 +6,4 @@ systemd-inhibit \
     --who="DiT Training" \
     --why="ML training in progress" \
     --mode=block \
-    /home/hido-pinto/PycharmProjects/Diffusion/.venv/bin/python train.py "$@"
+    /home/hido-pinto/PycharmProjects/HomeMadeDiffusion/.venv/bin/python train.py "$@"
