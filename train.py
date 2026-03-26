@@ -12,7 +12,7 @@ from transformers import get_scheduler
 
 from trainer import DiTTrainer
 from model_builder import build_model
-from utils import load_config
+from utils import load_config, setup_logging
 from data import build_dataloader
 
 
@@ -54,6 +54,7 @@ def build_lr_scheduler(
 
 
 def main() -> None:
+    setup_logging()
     load_dotenv()
     huggingface_hub.login()
     wandb.login()

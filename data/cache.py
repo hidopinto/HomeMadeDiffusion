@@ -2,6 +2,8 @@ import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+__all__ = ["CacheManifest", "LatentCachingEngine"]
+
 import numpy as np
 import torch
 from einops import rearrange

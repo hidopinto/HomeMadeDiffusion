@@ -9,8 +9,9 @@ from timm.models.vision_transformer import Attention
 from models.conditioning import SinCosPosEmbed2D
 from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
 from models.models import DiT, LatentDiffusion
-from diffusion_engine import DDPM, DiffusionEngine
-from samplers import DDIMSampler
+from diffusion.methods.ddpm import DDPM
+from diffusion.engine import DiffusionEngine
+from diffusion.samplers.ddim_sampler import DDIMSampler
 
 _B = 2
 _HIDDEN = 128

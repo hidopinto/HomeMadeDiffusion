@@ -10,7 +10,7 @@ from timm.models.vision_transformer import Attention
 from models.conditioning import SinCosPosEmbed2D
 from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
 from models.models import DiT
-from diffusion_engine import DDPM
+from diffusion.methods.ddpm import DDPM
 
 # ---------------------------------------------------------------------------
 # Tiny config constants — keeps all tests fast (< 1 s on CPU)

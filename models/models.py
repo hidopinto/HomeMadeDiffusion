@@ -11,6 +11,18 @@ from models.layers import PatchEmbed, FinalLayer, AdaLNTextProjector
 
 
 class DiTBlock(nn.Module):
+    """Single transformer block with AdaLN-Zero conditioning.
+
+    A shared MLP (the ``conditioner``) projects the combined
+    (timestep + text) embedding into 6 per-channel parameters:
+    ``shift_msa, scale_msa, gate_msa`` for self-attention and
+    ``shift_mlp, scale_mlp, gate_mlp`` for the MLP sub-layer.
+
+    Zero-initialization of the conditioner linear ensures every block
+    acts as an identity mapping at the start of training, giving a
+    stable gradient signal regardless of depth.
+    """
+
     def __init__(self, hidden_size, processor, conditioner):
         super().__init__()
         self.conditioner = conditioner  # e.g., AdaLNZeroStrategy
@@ -33,6 +45,24 @@ class DiTBlock(nn.Module):
 
 
 class DiT(nn.Module):
+    """Diffusion Transformer (Peebles & Xie, 2022).
+
+    Architecture: patch embedding → sinusoidal positional embedding →
+    N × DiTBlock (AdaLN-Zero) → FinalLayer → unpatchify.
+
+    Text is fused via AdaLN, not cross-attention: the pooled text embedding
+    is added to the timestep embedding and projected inside each block's
+    conditioner. This keeps the architecture simple while retaining strong
+    text conditioning.
+
+    Supports both 2-D images (B, C, H, W) and 3-D videos (B, C, F, H, W)
+    controlled by the ``is_video`` flag. The positional embedder and patch
+    sizes differ between the two modes.
+
+    Optional gradient checkpointing trades compute for VRAM: when enabled,
+    activations are recomputed on the backward pass rather than stored.
+    """
+
     def __init__(
             self,
             is_video,
@@ -131,6 +161,18 @@ class DiT(nn.Module):
 
 
 class LatentDiffusion(nn.Module):
+    """Full latent diffusion model: frozen encoders + trainable DiT + DiffusionEngine.
+
+    Training path (``forward``):
+        Takes pre-encoded latents and pre-encoded text embeddings (both produced
+        by ``LatentCachingEngine``). Applies CFG dropout, then delegates to
+        ``DiffusionEngine.compute_loss``. Only DiT weights receive gradients.
+
+    Inference path (``generate``):
+        Encodes text on-the-fly, runs the reverse-process sampler via
+        ``DiffusionEngine.sample``, and decodes latents with the frozen VAE.
+    """
+
     def __init__(self, config, dit_model, vae, text_encoder, tokenizer, engine):
         super().__init__()
         self.config = config

@@ -4,17 +4,21 @@ external_models:
   text_encoder: "openai/clip-vit-large-patch14"
 
 diffusion:
-  method: "ddpm"
-  sampler: "ddim"       # "ddim" or "ddpm"
-  ddpm:
-    num_timesteps: 1000
-    beta_start: 0.0001
-    beta_end: 0.02
-    learn_variance: True    # DDPM-specific: predict variance alongside noise (Improved DDPM)
-  ddim: {}                  # Sampler sub-config placeholder
-  flow_matching:
-    num_timesteps: 1000
-    use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
+  method: "ddpm"         # active training method: "ddpm" | "flow_matching"
+  sampler: "ddim"        # active sampler: "ddim" | "ddpm" | "flow_matching"
+  methods:
+    ddpm:
+      num_timesteps: 1000
+      beta_start: 0.0001
+      beta_end: 0.02
+      learn_variance: True    # Improved DDPM: predict variance alongside noise
+    flow_matching:
+      num_timesteps: 1000
+      use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
+  samplers:
+    ddim: {}                  # sampler sub-config placeholder (eta passed at call site)
+    ddpm: {}
+    flow_matching: {}
 
 dit:
   input_size: 64

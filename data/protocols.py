@@ -1,5 +1,7 @@
 from typing import Protocol, runtime_checkable
 
+__all__ = ["LatentEncoderProtocol", "TextEncoderProtocol"]
+
 import torch
 from torch import Tensor
 

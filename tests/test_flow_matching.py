@@ -10,7 +10,8 @@ import numpy as np
 import torch
 from unittest.mock import MagicMock
 
-from diffusion_engine import FlowMatching, _ot_reorder_noise
+from diffusion.methods.base import DiffusionMethod
+from diffusion.methods.flow_matching import FlowMatching, _ot_reorder_noise
 
 _B = 2
 _C = 4
@@ -146,7 +147,7 @@ def test_from_config():
     fm_cfg = MagicMock()
     fm_cfg.num_timesteps = 500
     fm_cfg.use_minibatch_ot = False
-    config.diffusion.__getitem__.return_value = fm_cfg
+    config.diffusion.methods.__getitem__.return_value = fm_cfg
     fm = FlowMatching.from_config(config)
     assert fm.num_timesteps == 500
     assert fm.use_minibatch_ot is False
@@ -176,3 +177,12 @@ def test_ot_reorder_reduces_cost():
         return float((diff ** 2).sum().item())
 
     assert total_cost(reordered) <= total_cost(noise) + 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+def test_flow_matching_satisfies_diffusion_method_protocol():
+    """FlowMatching must satisfy DiffusionMethod at runtime — catches interface drift."""
+    assert isinstance(FlowMatching(num_timesteps=_T), DiffusionMethod)

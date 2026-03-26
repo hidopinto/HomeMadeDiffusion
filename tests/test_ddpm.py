@@ -6,6 +6,8 @@ no device mismatch.  GPU-path is exercised indirectly via the overfit tests.
 
 import torch
 
+from diffusion.methods.base import DiffusionMethod
+
 
 _B = 2
 _C = 4
@@ -96,3 +98,12 @@ def test_vlb_loss_shape(ddpm_with_variance):
     var_v = torch.sigmoid(torch.randn_like(x0))   # interpolation in [0, 1]
     vlb = ddpm_with_variance.calc_vlb_loss(x0, xt, t, eps_pred, var_v)
     assert vlb.shape == ()
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+def test_ddpm_satisfies_diffusion_method_protocol(ddpm):
+    """DDPM must satisfy DiffusionMethod at runtime — catches interface drift."""
+    assert isinstance(ddpm, DiffusionMethod)

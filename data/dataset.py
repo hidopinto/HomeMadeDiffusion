@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+__all__ = ["LatentDataset"]
+
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset

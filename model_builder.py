@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import logging
+
 import torch
 from box import Box
 from diffusers import AutoencoderKL
 from timm.models.vision_transformer import Attention
-from transformers import CLIPModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer
 
-from diffusion_engine import DDPM, FlowMatching, DiffusionEngine
+__all__ = ["load_frozen_models", "build_model", "METHOD_REGISTRY", "SAMPLER_REGISTRY"]
+
+from diffusion import DDPM, FlowMatching, DiffusionEngine
+from diffusion.samplers import DDIMSampler, DDPMSampler, FlowMatchingSampler
 from models import AdaLNTextProjector, AdaLNZeroStrategy, DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D
-from samplers import DDIMSampler, DDPMSampler, FlowMatchingSampler
+
+logger = logging.getLogger(__name__)
 
 METHOD_REGISTRY: dict[str, type] = {
     "ddpm": DDPM,
@@ -22,17 +28,24 @@ SAMPLER_REGISTRY: dict[str, type] = {
 }
 
 
-def load_frozen_models(config: Box, device: str) -> tuple:
+def load_frozen_models(config: Box, device: str) -> tuple[AutoencoderKL, CLIPTextModel, CLIPTokenizer]:
+    logger.info("Loading frozen models (VAE + CLIP text encoder)...")
     vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
-    return vae.to(device), clip.text_model.to(device), tokenizer
+    text_encoder = CLIPTextModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
+    logger.info("Frozen models loaded.")
+    return vae.to(device), text_encoder.to(device), tokenizer
 
 
 def build_model(config: Box, device: str, gradient_checkpointing: bool = False) -> LatentDiffusion:
     vae, text_encoder, tokenizer = load_frozen_models(config, device)
 
     method  = METHOD_REGISTRY[config.diffusion.method].from_config(config)
+    logger.info(
+        "Building DiT: depth=%d, hidden_size=%d, method=%s, sampler=%s",
+        config.dit.depth, config.dit.hidden_size,
+        config.diffusion.method, config.diffusion.sampler,
+    )
     sampler = SAMPLER_REGISTRY[config.diffusion.sampler].from_config(config, method)
     engine  = DiffusionEngine(method=method, sampler=sampler)
 
@@ -67,4 +80,7 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
     )
-    return LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer, engine)
+    model = LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer, engine)
+    num_params = sum(p.numel() for p in model_core.parameters())
+    logger.info("DiT built: %.2fM trainable parameters.", num_params / 1e6)
+    return model

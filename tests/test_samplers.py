@@ -2,8 +2,10 @@
 
 import torch
 
-from diffusion_engine import DDPM, FlowMatching
-from samplers import DDPMSampler, DDIMSampler, FlowMatchingSampler
+from diffusion.methods.ddpm import DDPM
+from diffusion.methods.flow_matching import FlowMatching
+from diffusion.samplers import DDPMSampler, DDIMSampler, FlowMatchingSampler
+from diffusion.samplers.base import SamplerProtocol
 
 _B = 2
 _C = 4
@@ -123,3 +125,16 @@ def test_fm_loop_nonzero_output(device):
     sampler = FlowMatchingSampler(fm)
     out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3)
     assert not torch.allclose(out, torch.zeros(_shape(), device=device))
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+def test_all_samplers_satisfy_sampler_protocol():
+    """All three samplers must satisfy SamplerProtocol at runtime — catches interface drift."""
+    ddpm = DDPM(num_timesteps=10)
+    fm = FlowMatching(num_timesteps=10)
+    assert isinstance(DDPMSampler(ddpm), SamplerProtocol)
+    assert isinstance(DDIMSampler(ddpm), SamplerProtocol)
+    assert isinstance(FlowMatchingSampler(fm), SamplerProtocol)

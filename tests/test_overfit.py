@@ -4,6 +4,8 @@ Designed for extensibility:
 - Tests operate against DiffusionEngine.compute_loss(model, x_0, cond) — swapping in a
   rectified-flow engine (future work) requires no changes here.
 - Parametrized over is_video so both image and video paths are covered.
+- Parametrized over diffusion method (DDPM, FlowMatching) so both training objectives
+  are validated end-to-end at the gradient-flow level.
 """
 
 import pytest
@@ -14,8 +16,11 @@ from timm.models.vision_transformer import Attention
 from models.conditioning import SinCosPosEmbed2D, SinCosPosEmbed3D
 from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
 from models.models import DiT
-from diffusion_engine import DDPM, DiffusionEngine
-from samplers import DDIMSampler
+from diffusion.methods.ddpm import DDPM
+from diffusion.methods.flow_matching import FlowMatching
+from diffusion.engine import DiffusionEngine
+from diffusion.samplers.ddim_sampler import DDIMSampler
+from diffusion.samplers.flow_matching_sampler import FlowMatchingSampler
 
 _HIDDEN = 128
 _IN_CH = 4
@@ -77,9 +82,14 @@ def _make_3d_dit(device: str) -> DiT:
     ).to(device)
 
 
-def _make_engine(device: str) -> DiffusionEngine:
+def _make_ddpm_engine(device: str) -> DiffusionEngine:
     ddpm = DDPM(num_timesteps=_NUM_STEPS, learn_variance=False).to(device)
     return DiffusionEngine(method=ddpm, sampler=DDIMSampler(ddpm))
+
+
+def _make_fm_engine(device: str) -> DiffusionEngine:
+    fm = FlowMatching(num_timesteps=_NUM_STEPS).to(device)
+    return DiffusionEngine(method=fm, sampler=FlowMatchingSampler(fm))
 
 
 def _make_cond(B: int, device: str) -> dict:
@@ -93,8 +103,9 @@ def _make_cond(B: int, device: str) -> dict:
 # Overfit helper — shared logic for 2D and 3D
 # ---------------------------------------------------------------------------
 
-def _run_overfit(model: DiT, x_0: torch.Tensor, cond: dict, device: str) -> None:
-    engine = _make_engine(device)
+def _run_overfit(model: DiT, x_0: torch.Tensor, cond: dict, device: str,
+                 make_engine) -> None:
+    engine = make_engine(device)
     optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
 
     model.train()
@@ -118,18 +129,22 @@ def _run_overfit(model: DiT, x_0: torch.Tensor, cond: dict, device: str) -> None
 # Tests
 # ---------------------------------------------------------------------------
 
-def test_overfit_2d(device):
+@pytest.mark.parametrize("make_engine", [_make_ddpm_engine, _make_fm_engine],
+                         ids=["ddpm", "flow_matching"])
+def test_overfit_2d(make_engine, device):
     torch.manual_seed(0)
     model = _make_2d_dit(device)
     x_0 = torch.randn(2, _IN_CH, 16, 16, device=device)
     cond = _make_cond(2, device)
-    _run_overfit(model, x_0, cond, device)
+    _run_overfit(model, x_0, cond, device, make_engine)
 
 
-def test_overfit_3d_video(device):
+@pytest.mark.parametrize("make_engine", [_make_ddpm_engine, _make_fm_engine],
+                         ids=["ddpm", "flow_matching"])
+def test_overfit_3d_video(make_engine, device):
     torch.manual_seed(0)
     model = _make_3d_dit(device)
     # (B, C, F, H, W) — 4 frames, 16×16 spatial
     x_0 = torch.randn(2, _IN_CH, 4, 16, 16, device=device)
     cond = _make_cond(2, device)
-    _run_overfit(model, x_0, cond, device)
+    _run_overfit(model, x_0, cond, device, make_engine)

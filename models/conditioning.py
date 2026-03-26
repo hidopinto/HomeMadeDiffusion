@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+__all__ = [
+    "TimestepEmbedder",
+    "SinCosPosEmbed2D",
+    "SinCosPosEmbed3D",
+    "get_2d_sincos_pos_embed",
+    "get_1d_sincos_pos_embed_from_grid",
+]
+
 
 class TimestepEmbedder(nn.Module):
     """
@@ -55,6 +63,13 @@ def get_1d_sincos_pos_embed_from_grid(dim, grid):
 
 
 class SinCosPosEmbed2D(nn.Module):
+    """Static 2-D sinusoidal positional embeddings for image patches.
+
+    Computes and caches a (1, H*W, D) buffer at construction time.
+    ``forward`` expands it to (B, H*W, D) to match the batch dimension.
+    No learnable parameters — the embedding is fixed throughout training.
+    """
+
     def __init__(self, hidden_size, grid_size):
         super().__init__()
         # Logic from previous response moved here
@@ -68,6 +83,15 @@ class SinCosPosEmbed2D(nn.Module):
 
 
 class SinCosPosEmbed3D(nn.Module):
+    """Separable spatio-temporal sinusoidal positional embeddings for video patches.
+
+    Spatial and temporal embeddings are computed independently and summed:
+        combined[f, h*w] = spatial[h*w] + temporal[f]
+    giving a (1, F*H*W, D) buffer. ``forward`` dynamically slices the temporal
+    buffer to ``num_temporal_patches = x.shape[1] // (H*W)`` so the embedder
+    supports variable-length sequences up to ``max_frames`` frames.
+    """
+
     def __init__(self, hidden_size, grid_size, max_frames):
         super().__init__()
         self.grid_size = grid_size
