@@ -19,13 +19,13 @@ logger = logging.getLogger(__name__)
 def _ot_reorder_noise(x_0: Tensor, noise: Tensor) -> Tensor:
     """Reorder noise to minimise intra-batch L2 transport cost.
 
-    Solves the linear assignment problem on the pairwise L2 cost matrix
-    between x_0 and noise samples using the Hungarian algorithm.
-    Complexity: O(B²·D) to build cost matrix + O(B³) to solve.
+    Cost matrix is computed on GPU via torch.cdist; only the small (B×B)
+    result is transferred to CPU for the Hungarian solver.
+    Complexity: O(B²·D) on GPU + O(B³) solver on the (B×B) CPU matrix.
     """
-    x_flat = rearrange(x_0.detach().cpu().float(), "b ... -> b (...)")  .numpy()
-    n_flat = rearrange(noise.detach().cpu().float(), "b ... -> b (...)").numpy()
-    cost = np.sum((x_flat[:, None, :] - n_flat[None, :, :]) ** 2, axis=-1)  # (B, B)
+    x_flat = rearrange(x_0.detach().float(), "b ... -> b (...)")
+    n_flat = rearrange(noise.detach().float(), "b ... -> b (...)")
+    cost = torch.cdist(x_flat, n_flat, compute_mode="use_mm_for_euclid_dist").pow(2).cpu().numpy()
     _, col_ind = linear_sum_assignment(cost)
     return noise[col_ind]
 
