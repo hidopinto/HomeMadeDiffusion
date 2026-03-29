@@ -134,11 +134,12 @@ class DiTTrainer:
                         unwrapped = self.accelerator.unwrap_model(self.model)
                         unwrapped.transformer.eval()
                         inference_prompt    = getattr(self.config.training, "inference_prompt")
-                        inference_steps     = getattr(self.config.training, "inference_steps", 50)
+                        sampler_cfg         = self.config.diffusion.samplers[self.config.diffusion.sampler]
+                        inference_steps     = getattr(sampler_cfg, "num_steps", 50)
+                        inference_eta       = getattr(sampler_cfg, "eta", 0.0)
                         guidance_scale      = getattr(self.config.training, "guidance_scale", 7.5)
                         inference_height    = getattr(self.config.training, "inference_height", 512)
                         inference_width     = getattr(self.config.training, "inference_width", 512)
-                        inference_eta       = getattr(self.config.training, "inference_eta", 0.0)
                         inference_scheduler = getattr(self.config.diffusion, "sampler", "ddim")
                         images = unwrapped.generate(
                             [inference_prompt],

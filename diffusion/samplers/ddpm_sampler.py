@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 from box import Box
@@ -21,6 +21,12 @@ class DDPMSampler:
     @classmethod
     def from_config(cls, config: Box, schedule: DDPM) -> "DDPMSampler":
         return cls(schedule)
+
+    def update_settings(self, **kwargs: Any) -> None:
+        # DDPMSampler always runs the full schedule; no configurable settings
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def _step(
         self,

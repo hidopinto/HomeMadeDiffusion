@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 from torch import nn, Tensor
@@ -19,6 +19,8 @@ class DiffusionMethod(Protocol):
     """
 
     num_timesteps: int
+
+    def update_settings(self, **kwargs: Any) -> None: ...
 
     def expected_out_channels(self, in_channels: int) -> int: ...
 

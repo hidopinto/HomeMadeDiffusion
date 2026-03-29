@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 from box import Box
@@ -20,12 +20,20 @@ class FlowMatchingSampler:
     given the initial noise.
     """
 
-    def __init__(self, schedule: FlowMatching) -> None:
+    def __init__(self, schedule: FlowMatching, num_steps: int = 50) -> None:
         self.schedule = schedule
+        self.num_steps = num_steps
 
     @classmethod
     def from_config(cls, config: Box, schedule: FlowMatching) -> "FlowMatchingSampler":
-        return cls(schedule)
+        cfg = config.diffusion.samplers.flow_matching
+        return cls(schedule, num_steps=cfg.num_steps)
+
+    def update_settings(self, **kwargs: Any) -> None:
+        # eta is intentionally absent — FM is always deterministic; unknown keys are dropped
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def _step(
         self,
@@ -45,17 +53,16 @@ class FlowMatchingSampler:
         model_fn: Callable,
         shape: tuple,
         device: torch.device,
-        num_steps: int = 50,
         model_kwargs: dict | None = None,
         collector: IntermediateCollector | None = None,
     ) -> Tensor:
         x = torch.randn(shape, device=device)
-        dt = 1.0 / num_steps
+        dt = 1.0 / self.num_steps
         t_indices = torch.linspace(
-            0, self.schedule.num_timesteps - 1, num_steps, dtype=torch.long
+            0, self.schedule.num_timesteps - 1, self.num_steps, dtype=torch.long
         ).tolist()
         for i, t_idx in enumerate(t_indices):
             x = self._step(model_fn, x, int(t_idx), dt, model_kwargs=model_kwargs)
             if collector is not None:
-                collector.maybe_collect(i, num_steps, x)
+                collector.maybe_collect(i, self.num_steps, x)
         return x

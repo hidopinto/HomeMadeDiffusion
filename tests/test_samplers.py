@@ -59,23 +59,33 @@ def test_ddim_step_shape(device):
 
 def test_ddim_loop_output_shape(device):
     schedule = _fast_ddpm()
-    sampler = DDIMSampler(schedule)
-    out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3, eta=0.0)
+    sampler = DDIMSampler(schedule, num_steps=3, eta=0.0)
+    out = sampler.sample_loop(_model_fn, _shape(), device)
     assert out.shape == _shape()
 
 
 def test_ddim_deterministic(device):
     """eta=0 → no stochastic noise term → identical outputs for the same seed."""
     schedule = _fast_ddpm()
-    sampler = DDIMSampler(schedule)
+    sampler = DDIMSampler(schedule, num_steps=3, eta=0.0)
 
     torch.manual_seed(42)
-    out1 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3, eta=0.0)
+    out1 = sampler.sample_loop(_model_fn, _shape(), device)
 
     torch.manual_seed(42)
-    out2 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3, eta=0.0)
+    out2 = sampler.sample_loop(_model_fn, _shape(), device)
 
     assert torch.allclose(out1, out2)
+
+
+def test_ddim_update_settings(device):
+    """update_settings must mutate known attributes and silently ignore unknown ones."""
+    schedule = _fast_ddpm()
+    sampler = DDIMSampler(schedule, num_steps=10, eta=0.0)
+    sampler.update_settings(num_steps=3, eta=0.5, unknown_key="ignored")
+    assert sampler.num_steps == 3
+    assert sampler.eta == 0.5
+    assert not hasattr(sampler, "unknown_key")
 
 
 # ---------------------------------------------------------------------------
@@ -99,21 +109,21 @@ def test_fm_step_shape(device):
 def test_fm_loop_output_shape(device):
     """Full Euler loop must produce tensor with correct shape."""
     fm = _fast_fm()
-    sampler = FlowMatchingSampler(fm)
-    out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+    sampler = FlowMatchingSampler(fm, num_steps=5)
+    out = sampler.sample_loop(_model_fn, _shape(), device)
     assert out.shape == _shape()
 
 
 def test_fm_loop_deterministic(device):
     """FM ODE has no stochastic terms — identical outputs for the same seed."""
     fm = _fast_fm()
-    sampler = FlowMatchingSampler(fm)
+    sampler = FlowMatchingSampler(fm, num_steps=5)
 
     torch.manual_seed(42)
-    out1 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+    out1 = sampler.sample_loop(_model_fn, _shape(), device)
 
     torch.manual_seed(42)
-    out2 = sampler.sample_loop(_model_fn, _shape(), device, num_steps=5)
+    out2 = sampler.sample_loop(_model_fn, _shape(), device)
 
     assert torch.allclose(out1, out2)
 
@@ -122,9 +132,18 @@ def test_fm_loop_nonzero_output(device):
     """sample_loop output must not be all-zeros (basic sanity check)."""
     torch.manual_seed(0)
     fm = _fast_fm()
-    sampler = FlowMatchingSampler(fm)
-    out = sampler.sample_loop(_model_fn, _shape(), device, num_steps=3)
+    sampler = FlowMatchingSampler(fm, num_steps=3)
+    out = sampler.sample_loop(_model_fn, _shape(), device)
     assert not torch.allclose(out, torch.zeros(_shape(), device=device))
+
+
+def test_fm_update_settings_ignores_eta(device):
+    """FlowMatchingSampler must silently drop eta — FM is always deterministic."""
+    fm = _fast_fm()
+    sampler = FlowMatchingSampler(fm, num_steps=5)
+    sampler.update_settings(num_steps=3, eta=0.9)  # eta should be ignored
+    assert sampler.num_steps == 3
+    assert not hasattr(sampler, "eta")
 
 
 # ---------------------------------------------------------------------------

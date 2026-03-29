@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 import torch
@@ -56,6 +57,11 @@ class FlowMatching(nn.Module):
     def from_config(cls, config: Box) -> "FlowMatching":
         cfg = config.diffusion.methods[config.diffusion.method]
         return cls(num_timesteps=cfg.num_timesteps, use_minibatch_ot=cfg.use_minibatch_ot)
+
+    def update_settings(self, **kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def expected_out_channels(self, in_channels: int) -> int:
         """FM predicts the velocity field — same channel count as input, no variance head."""

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import torch
 from torch import Tensor
@@ -37,10 +37,13 @@ class SamplerProtocol(Protocol):
     a circular import (engine.py only imports this protocol, not the concrete classes).
     """
 
+    def update_settings(self, **kwargs: Any) -> None: ...
+
     def sample_loop(
         self,
         model_fn: Callable,
         shape: tuple,
         device: torch.device,
-        **kwargs,
+        model_kwargs: dict | None,
+        collector: "IntermediateCollector | None",
     ) -> Tensor: ...

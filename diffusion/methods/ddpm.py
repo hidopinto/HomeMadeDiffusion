@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import torch
 from box import Box
@@ -81,6 +82,11 @@ class DDPM(nn.Module):
             beta_start=cfg.beta_start,
             beta_end=cfg.beta_end,
         )
+
+    def update_settings(self, **kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def expected_out_channels(self, in_channels: int) -> int:
         """Declares how many output channels the model must produce for this method."""

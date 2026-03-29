@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 from box import Box
@@ -19,12 +19,20 @@ class DDIMSampler:
     eta=0 → fully deterministic; eta=1 → recovers DDPM stochastic sampling.
     """
 
-    def __init__(self, schedule: DDPM) -> None:
+    def __init__(self, schedule: DDPM, num_steps: int = 50, eta: float = 0.0) -> None:
         self.schedule = schedule
+        self.num_steps = num_steps
+        self.eta = eta
 
     @classmethod
     def from_config(cls, config: Box, schedule: DDPM) -> "DDIMSampler":
-        return cls(schedule)
+        cfg = config.diffusion.samplers.ddim
+        return cls(schedule, num_steps=cfg.num_steps, eta=cfg.eta)
+
+    def update_settings(self, **kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
     def _step(
         self,
@@ -54,16 +62,14 @@ class DDIMSampler:
         model_fn: Callable,
         shape: tuple,
         device: torch.device,
-        num_steps: int = 50,
-        eta: float = 0.0,
         model_kwargs: dict | None = None,
         collector: IntermediateCollector | None = None,
     ) -> Tensor:
         x = torch.randn(shape, device=device)
-        timesteps = torch.linspace(self.schedule.num_timesteps - 1, 0, num_steps, dtype=torch.long).tolist()
+        timesteps = torch.linspace(self.schedule.num_timesteps - 1, 0, self.num_steps, dtype=torch.long).tolist()
         for i, t_idx in enumerate(timesteps):
             t_prev = int(timesteps[i + 1]) if i + 1 < len(timesteps) else -1
-            x = self._step(model_fn, x, int(t_idx), t_prev, eta=eta, model_kwargs=model_kwargs)
+            x = self._step(model_fn, x, int(t_idx), t_prev, eta=self.eta, model_kwargs=model_kwargs)
             if collector is not None:
-                collector.maybe_collect(i, num_steps, x)
+                collector.maybe_collect(i, self.num_steps, x)
         return x

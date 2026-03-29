@@ -37,4 +37,8 @@ class DiffusionEngine(nn.Module):
 
     def sample(self, model_fn: Callable, shape: tuple, device: torch.device, **kwargs) -> Tensor:
         kwargs.pop("scheduler", None)  # sampler is chosen at build time
-        return self.sampler.sample_loop(model_fn, shape, device, **kwargs)
+        model_kwargs = kwargs.pop("model_kwargs", None)
+        collector = kwargs.pop("collector", None)
+        # remaining kwargs are sampler settings — sampler decides what applies via hasattr
+        self.sampler.update_settings(**kwargs)
+        return self.sampler.sample_loop(model_fn, shape, device, model_kwargs=model_kwargs, collector=collector)
