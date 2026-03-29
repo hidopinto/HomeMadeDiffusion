@@ -6,7 +6,7 @@ import torch
 from torchvision.transforms.functional import to_pil_image
 
 from model_builder import build_model
-from samplers import IntermediateCollector
+from diffusion.samplers import IntermediateCollector
 from utils import load_config
 
 

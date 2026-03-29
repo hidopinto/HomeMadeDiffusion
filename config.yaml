@@ -4,8 +4,8 @@ external_models:
   text_encoder: "openai/clip-vit-large-patch14"
 
 diffusion:
-  method: "ddpm"         # active training method: "ddpm" | "flow_matching"
-  sampler: "ddim"        # active sampler: "ddim" | "ddpm" | "flow_matching"
+  method: "flow_matching"         # active training method: "ddpm" | "flow_matching"
+  sampler: "flow_matching"        # active sampler: "ddim" | "ddpm" | "flow_matching"
   methods:
     ddpm:
       num_timesteps: 1000
@@ -14,7 +14,7 @@ diffusion:
       learn_variance: True    # Improved DDPM: predict variance alongside noise
     flow_matching:
       num_timesteps: 1000
-      use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
+      use_minibatch_ot: True  # set True to enable minibatch OT noise reordering
   samplers:
     ddim: {}                  # sampler sub-config placeholder (eta passed at call site)
     ddpm: {}
@@ -29,28 +29,29 @@ dit:
   frequency_embedding_size: 256
   max_period: 10000
   max_frames: 512           # Video only
-  depth: 18                 # Reduced from 28 for "simple" version
+  depth: 28                 # Reduced from 28 for "simple" version
   num_heads: 16             # hidden_size / 64
   vae_scale_factor: 0.18215 # SDXL Standard
 
 training:
   epochs: 500
-  lr: 3.5e-4
+  lr: 2.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
-  warmup_ratio: 0.02                  # fraction of total optimizer steps for warmup (ignored by "constant")
+  warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
   lr_end: 1.0e-6              # The floor of the cosine decay
-  weight_decay: 0.03
+  weight_decay: 0.05
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 384
+  batch_size: 256
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "checkpoints"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
-  inference_every_steps: 500  # Run inference every N optimizer steps; False = disabled
+  inference_every_steps: 1  # Run inference every N optimizer steps; False = disabled
   inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
+  # inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
   inference_height: 512    # must match data.image_size
   inference_width: 512     # must match data.image_size
   inference_eta: 0.0       # DDIM stochasticity; 0 = deterministic
@@ -65,6 +66,7 @@ general:
 
 data:
   dataset_name: "JotDe/mscoco_100k"
+  # dataset_name: "yuvalkirstain/pickapic_v2" # Better aesthetic quality than MS-COCO
   split: "train"
   image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
   image_key: "image"
