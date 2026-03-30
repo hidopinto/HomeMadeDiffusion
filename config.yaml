@@ -37,8 +37,8 @@ dit:
   vae_scale_factor: 0.18215 # SDXL Standard
 
 training:
-  epochs: 500
-  # epochs: 100
+  # epochs: 500
+  epochs: 50  # 584k/320 ≈ 1,825 steps/epoch → ~91k total steps ≈ 21–25 hours
   lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
   warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
@@ -54,11 +54,11 @@ training:
   checkpoint_dir: "checkpoints"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
-  inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
-  # inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
+  # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
+  inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
   inference_height: 512    # must match data.image_size
   inference_width: 512     # must match data.image_size
-  guidance_scale: 7.5      # CFG scale used during in-training inference
+  guidance_scale: 6.5      # CFG scale used during in-training inference (6.5 safer with 20% CFG dropout)
   cfg_dropout_prob: 0.2   # Fraction of samples trained without text conditioning (for CFG)
 
 general:
@@ -67,12 +67,13 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
-  dataset_name: "JotDe/mscoco_100k"
-  # dataset_name: "yuvalkirstain/pickapic_v2" # Better aesthetic quality than MS-COCO
+  # dataset_name: "JotDe/mscoco_100k"
+  # dataset_name: "yuvalkirstain/pickapic_v2"  # gated — needs HF login + ToS acceptance
+  dataset_name: "pickapic-anonymous/pickapic_v1"  # 584k SD-generated images, no auth
   split: "train"
   image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
-  image_key: "image"
-  caption_key: "text"
+  image_key: "jpg_0"      # JPEG bytes; converted to PIL in cache.py
+  caption_key: "caption"  # scalar string
   cache_dir: "cache"
   encoding_batch_size: 8
   num_workers: 8

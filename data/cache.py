@@ -1,3 +1,4 @@
+import io
 import json
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -129,6 +130,8 @@ class LatentCachingEngine:
         # --- Image preprocessing ---
         pixel_arrays = []
         for img in images:
+            if isinstance(img, bytes):
+                img = Image.open(io.BytesIO(img))
             if img.mode != "RGB":
                 img = img.convert("RGB")
             w, h = img.size
