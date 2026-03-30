@@ -1,8 +1,9 @@
+import time
 from pathlib import Path
 
 __all__ = ["build_dataloader"]
 
-from datasets import load_dataset
+from datasets import DownloadConfig, load_dataset
 from torch.utils.data import DataLoader
 
 from data.cache import CacheManifest, LatentCachingEngine
@@ -38,7 +39,25 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
     if cache_valid:
         print("Cache valid, loading from disk...")
     else:
-        raw_dataset = load_dataset(dataset_name, split=split)
+        num_proc = config.data.dataset_num_proc
+        max_retries = config.data.dataset_max_retries
+        download_config = DownloadConfig(max_retries=max_retries)
+        raw_dataset = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                raw_dataset = load_dataset(
+                    dataset_name,
+                    split=split,
+                    num_proc=num_proc,
+                    download_config=download_config,
+                )
+                break
+            except Exception as e:
+                if attempt == max_retries:
+                    raise
+                wait = 2 ** attempt
+                print(f"Download attempt {attempt}/{max_retries} failed ({e}). Retrying in {wait}s...")
+                time.sleep(wait)
         engine = LatentCachingEngine(
             vae=vae,
             tokenizer=tokenizer,

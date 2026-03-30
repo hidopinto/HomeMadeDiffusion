@@ -77,3 +77,5 @@ data:
   cache_dir: "cache"
   encoding_batch_size: 8
   num_workers: 8
+  dataset_num_proc: 4       # parallel workers for load_dataset() download (lower = less bandwidth saturation)
+  dataset_max_retries: 5    # outer retry attempts on network failure (exponential backoff)
