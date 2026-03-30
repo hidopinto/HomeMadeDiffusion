@@ -2,6 +2,10 @@ import argparse
 from functools import partial
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import torch
 from torchvision.transforms.functional import to_pil_image
 
@@ -15,6 +19,13 @@ def _every_n_steps(freq: int, step_idx: int, total_steps: int, x: torch.Tensor) 
 
 
 def main() -> None:
+    # Pre-parse --config so we can use config.inference.out_dir as the default for --out_dir
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--config", default="config.yaml")
+    _pre_args, _ = _pre.parse_known_args()
+    _cfg = load_config(_pre_args.config)
+    _default_out_dir = _cfg.inference.out_dir
+
     parser = argparse.ArgumentParser(description="Run DiT text-to-image inference")
     parser.add_argument("--checkpoint", required=True, help="Path to DiT state_dict .pt file")
     parser.add_argument("--prompt", required=True, nargs="+", help="Text prompt(s)")
@@ -26,7 +37,7 @@ def main() -> None:
     parser.add_argument("--eta", type=float, default=0.0,
                         help="Stochasticity: 0=DDIM deterministic, 1=full DDPM noise")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--out_dir", default="outputs")
+    parser.add_argument("--out_dir", default=_default_out_dir)
     parser.add_argument("--format", choices=["png", "jpg"], default="png")
     parser.add_argument("--save_intermediates", action="store_true")
     parser.add_argument("--intermediate_freq", type=int, default=10)

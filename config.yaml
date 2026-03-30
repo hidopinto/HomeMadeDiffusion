@@ -51,7 +51,7 @@ training:
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
-  checkpoint_dir: "checkpoints"
+  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/pickapic_checkpoints"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
@@ -75,8 +75,11 @@ data:
   image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
   image_key: "jpg_0"      # JPEG bytes; converted to PIL in cache.py
   caption_key: "caption"  # scalar string
-  cache_dir: "cache"
+  cache_dir: "/media/hido-pinto/מחסן/cache"
   encoding_batch_size: 8
   num_workers: 8
   dataset_num_proc: 4       # parallel workers for load_dataset() download (lower = less bandwidth saturation)
   dataset_max_retries: 5    # outer retry attempts on network failure (exponential backoff)
+
+inference:
+  out_dir: "/media/hido-pinto/מחסן/outputs"
