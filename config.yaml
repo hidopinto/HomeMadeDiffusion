@@ -76,7 +76,7 @@ data:
   image_key: "jpg_0"      # JPEG bytes; converted to PIL in cache.py
   caption_key: "caption"  # scalar string
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 8
+  encoding_batch_size: 64
   num_workers: 8
   dataset_num_proc: 4       # parallel workers for load_dataset() download (lower = less bandwidth saturation)
   dataset_max_retries: 5    # outer retry attempts on network failure (exponential backoff)

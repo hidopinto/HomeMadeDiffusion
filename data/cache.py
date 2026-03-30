@@ -1,5 +1,6 @@
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -61,6 +62,26 @@ class LatentCachingEngine:
         self.device = device
         self.encoder_model_ids = encoder_model_ids or {}
 
+    @staticmethod
+    def _save_sample(
+        idx: int,
+        latent: Tensor,
+        text_embeds: dict[str, dict[str, Tensor]],
+        latent_dir: Path,
+        cache_dir: Path,
+    ) -> None:
+        tmp = latent_dir / f"tmp_{idx:06d}.pt"
+        torch.save(latent.cpu(), tmp)
+        tmp.rename(latent_dir / f"{idx:06d}.pt")
+        for key, embeds in text_embeds.items():
+            tmp = cache_dir / key / f"tmp_{idx:06d}.pt"
+            sample = {
+                "hidden_states": embeds["hidden_states"].cpu(),
+                "attention_mask": embeds["attention_mask"].cpu(),
+            }
+            torch.save(sample, tmp)
+            tmp.rename(cache_dir / key / f"{idx:06d}.pt")
+
     def run(self, dataset, cache_root: Path) -> Path:
         dataset_name = self.config.data.dataset_name
         split = self.config.data.split
@@ -77,6 +98,9 @@ class LatentCachingEngine:
         caption_key = self.config.data.caption_key
 
         print(f"Caching {n} samples to {cache_dir} ...")
+        executor = ThreadPoolExecutor(max_workers=16)
+        pending: list[Future] = []
+
         for start in range(0, n, batch_size):
             end = min(start + batch_size, n)
             batch_indices = list(range(start, end))
@@ -90,23 +114,29 @@ class LatentCachingEngine:
             if all_exist:
                 continue
 
-            images = [dataset[i][image_key] for i in batch_indices]
-            captions = [dataset[i][caption_key] for i in batch_indices]
+            batch_data = dataset[start:end]
+            images = batch_data[image_key]
+            captions = batch_data[caption_key]
             latents, text_embeds = self._encode_batch(images, captions)
 
             for j, i in enumerate(batch_indices):
-                tmp = latent_dir / f"tmp_{i:06d}.pt"
-                torch.save(latents[j].cpu(), tmp)
-                tmp.rename(latent_dir / f"{i:06d}.pt")
-
-                for key, embeds in text_embeds.items():
-                    tmp = cache_dir / key / f"tmp_{i:06d}.pt"
-                    sample = {
-                        "hidden_states": embeds["hidden_states"][j].cpu(),
-                        "attention_mask": embeds["attention_mask"][j].cpu(),
+                per_sample_embeds = {
+                    key: {
+                        "hidden_states": embeds["hidden_states"][j],
+                        "attention_mask": embeds["attention_mask"][j],
                     }
-                    torch.save(sample, tmp)
-                    tmp.rename(cache_dir / key / f"{i:06d}.pt")
+                    for key, embeds in text_embeds.items()
+                }
+                pending.append(
+                    executor.submit(
+                        self._save_sample,
+                        i, latents[j], per_sample_embeds, latent_dir, cache_dir,
+                    )
+                )
+
+        for f in pending:
+            f.result()
+        executor.shutdown(wait=False)
 
         manifest = CacheManifest(
             dataset_name=dataset_name,
