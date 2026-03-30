@@ -40,24 +40,35 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
         print("Cache valid, loading from disk...")
     else:
         num_proc = config.data.dataset_num_proc
-        max_retries = config.data.dataset_max_retries
-        download_config = DownloadConfig(max_retries=max_retries)
-        raw_dataset = None
-        for attempt in range(1, max_retries + 1):
-            try:
-                raw_dataset = load_dataset(
-                    dataset_name,
-                    split=split,
-                    num_proc=num_proc,
-                    download_config=download_config,
-                )
-                break
-            except Exception as e:
-                if attempt == max_retries:
-                    raise
-                wait = 2 ** attempt
-                print(f"Download attempt {attempt}/{max_retries} failed ({e}). Retrying in {wait}s...")
-                time.sleep(wait)
+        local_data_dir = getattr(config.data, "local_data_dir", None)
+        if local_data_dir:
+            resolved = str(Path(local_data_dir).expanduser())
+            print(f"Loading dataset from local Parquet files: {resolved}")
+            raw_dataset = load_dataset(
+                "parquet",
+                data_dir=resolved,
+                split=split,
+                num_proc=num_proc,
+            )
+        else:
+            max_retries = config.data.dataset_max_retries
+            download_config = DownloadConfig(max_retries=max_retries)
+            raw_dataset = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    raw_dataset = load_dataset(
+                        dataset_name,
+                        split=split,
+                        num_proc=num_proc,
+                        download_config=download_config,
+                    )
+                    break
+                except Exception as e:
+                    if attempt == max_retries:
+                        raise
+                    wait = 2 ** attempt
+                    print(f"Download attempt {attempt}/{max_retries} failed ({e}). Retrying in {wait}s...")
+                    time.sleep(wait)
         engine = LatentCachingEngine(
             vae=vae,
             tokenizer=tokenizer,

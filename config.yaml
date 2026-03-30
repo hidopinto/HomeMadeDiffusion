@@ -70,6 +70,7 @@ data:
   # dataset_name: "JotDe/mscoco_100k"
   # dataset_name: "yuvalkirstain/pickapic_v2"  # gated — needs HF login + ToS acceptance
   dataset_name: "pickapic-anonymous/pickapic_v1"  # 584k SD-generated images, no auth
+  local_data_dir: "/media/hido-pinto/מחסן/datasets/pickapic-anonymous--pickapic_v1"  # set to load from local Parquet files; unset or null to fetch from Hub
   split: "train"
   image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
   image_key: "jpg_0"      # JPEG bytes; converted to PIL in cache.py
