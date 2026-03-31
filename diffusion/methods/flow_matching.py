@@ -45,18 +45,35 @@ class FlowMatching(nn.Module):
     cost between x_0 and noise pairs before computing the conditional path.
     """
 
-    def __init__(self, num_timesteps: int = 1000, use_minibatch_ot: bool = False) -> None:
+    def __init__(
+        self,
+        num_timesteps: int = 1000,
+        use_minibatch_ot: bool = False,
+        time_sampling: str = "uniform",
+        logit_normal_mean: float = 0.0,
+        logit_normal_std: float = 1.0,
+    ) -> None:
         super().__init__()
         self.num_timesteps = num_timesteps
         self.use_minibatch_ot = use_minibatch_ot
+        self.time_sampling = time_sampling
+        self.logit_normal_mean = logit_normal_mean
+        self.logit_normal_std = logit_normal_std
         logger.debug(
-            "FlowMatching: T=%d, use_minibatch_ot=%s", num_timesteps, use_minibatch_ot
+            "FlowMatching: T=%d, use_minibatch_ot=%s, time_sampling=%s",
+            num_timesteps, use_minibatch_ot, time_sampling,
         )
 
     @classmethod
     def from_config(cls, config: Box) -> "FlowMatching":
         cfg = config.diffusion.methods[config.diffusion.method]
-        return cls(num_timesteps=cfg.num_timesteps, use_minibatch_ot=cfg.use_minibatch_ot)
+        return cls(
+            num_timesteps=cfg.num_timesteps,
+            use_minibatch_ot=cfg.use_minibatch_ot,
+            time_sampling=getattr(cfg, "time_sampling", "uniform"),
+            logit_normal_mean=getattr(cfg, "logit_normal_mean", 0.0),
+            logit_normal_std=getattr(cfg, "logit_normal_std", 1.0),
+        )
 
     def update_settings(self, **kwargs: Any) -> None:
         for key, value in kwargs.items():
@@ -68,6 +85,10 @@ class FlowMatching(nn.Module):
         return in_channels
 
     def sample_timesteps(self, batch_size: int, device: torch.device) -> Tensor:
+        if self.time_sampling == "logit_normal":
+            u = torch.randn(batch_size, device=device) * self.logit_normal_std + self.logit_normal_mean
+            t_cont = torch.sigmoid(u)
+            return (t_cont * (self.num_timesteps - 1)).long().clamp(0, self.num_timesteps - 1)
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
 
     def prepare_noise(self, x_0: Tensor, noise: Tensor) -> Tensor:
@@ -98,5 +119,6 @@ class FlowMatching(nn.Module):
     def __repr__(self) -> str:
         return (
             f"FlowMatching(num_timesteps={self.num_timesteps}, "
-            f"use_minibatch_ot={self.use_minibatch_ot})"
+            f"use_minibatch_ot={self.use_minibatch_ot}, "
+            f"time_sampling={self.time_sampling!r})"
         )

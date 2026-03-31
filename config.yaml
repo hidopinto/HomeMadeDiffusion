@@ -15,6 +15,9 @@ diffusion:
     flow_matching:
       num_timesteps: 1000
       use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
+      time_sampling: "logit_normal"  # "uniform" | "logit_normal" (SD3/Flux style)
+      logit_normal_mean: 0.0         # mean of N before sigmoid; 0 = centred at t=0.5
+      logit_normal_std: 1.0          # spread; lower = tighter midpoint cluster
   samplers:
     ddim:
       num_steps: 50

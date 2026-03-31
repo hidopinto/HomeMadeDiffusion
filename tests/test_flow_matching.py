@@ -46,6 +46,26 @@ def test_sample_timesteps_dtype():
     assert t.dtype == torch.long
 
 
+def test_logit_normal_timesteps_range_and_dtype():
+    """Logit-normal samples must be long dtype and stay within [0, T-1]."""
+    fm = FlowMatching(num_timesteps=_T, time_sampling="logit_normal")
+    t = fm.sample_timesteps(1000, _CPU)
+    assert t.dtype == torch.long
+    assert t.min() >= 0
+    assert t.max() < fm.num_timesteps
+
+
+def test_logit_normal_timesteps_center_weighted():
+    """Logit-normal (mean=0, std=1) must concentrate >40% of samples in the middle third."""
+    torch.manual_seed(42)
+    fm = FlowMatching(num_timesteps=_T, time_sampling="logit_normal",
+                      logit_normal_mean=0.0, logit_normal_std=1.0)
+    t = fm.sample_timesteps(10_000, _CPU).float()
+    lo, hi = _T / 3, 2 * _T / 3
+    fraction_middle = ((t >= lo) & (t < hi)).float().mean().item()
+    assert fraction_middle > 0.40, f"expected >40% in middle third, got {fraction_middle:.2%}"
+
+
 # ---------------------------------------------------------------------------
 # q_sample (OT conditional path)
 # ---------------------------------------------------------------------------
@@ -151,6 +171,35 @@ def test_from_config():
     fm = FlowMatching.from_config(config)
     assert fm.num_timesteps == 500
     assert fm.use_minibatch_ot is False
+
+
+def test_from_config_logit_normal():
+    """from_config reads time_sampling and logit-normal params when present."""
+    config = MagicMock()
+    config.diffusion.method = "flow_matching"
+    fm_cfg = MagicMock(spec=["num_timesteps", "use_minibatch_ot",
+                              "time_sampling", "logit_normal_mean", "logit_normal_std"])
+    fm_cfg.num_timesteps = 1000
+    fm_cfg.use_minibatch_ot = False
+    fm_cfg.time_sampling = "logit_normal"
+    fm_cfg.logit_normal_mean = 0.0
+    fm_cfg.logit_normal_std = 1.0
+    config.diffusion.methods.__getitem__.return_value = fm_cfg
+    fm = FlowMatching.from_config(config)
+    assert fm.time_sampling == "logit_normal"
+    assert fm.logit_normal_std == 1.0
+
+
+def test_from_config_backward_compat_defaults_to_uniform():
+    """from_config must default to 'uniform' when time_sampling is absent (old configs)."""
+    config = MagicMock()
+    config.diffusion.method = "flow_matching"
+    fm_cfg = MagicMock(spec=["num_timesteps", "use_minibatch_ot"])  # no time_sampling attr
+    fm_cfg.num_timesteps = 1000
+    fm_cfg.use_minibatch_ot = False
+    config.diffusion.methods.__getitem__.return_value = fm_cfg
+    fm = FlowMatching.from_config(config)
+    assert fm.time_sampling == "uniform"
 
 
 # ---------------------------------------------------------------------------
