@@ -7,6 +7,7 @@ from torch import nn, Tensor
 
 from diffusion.methods.base import DiffusionMethod
 from diffusion.samplers.base import SamplerProtocol
+from models.condition_manager import ConditionOutput
 
 __all__ = ["DiffusionEngine"]
 
@@ -28,11 +29,11 @@ class DiffusionEngine(nn.Module):
         self.method = method
         self.sampler = sampler
 
-    def compute_loss(self, model: nn.Module, x_0: Tensor, cond: dict) -> Tensor:
+    def compute_loss(self, model: nn.Module, x_0: Tensor, cond: ConditionOutput) -> Tensor:
         t = self.method.sample_timesteps(x_0.shape[0], x_0.device)
         noise = self.method.prepare_noise(x_0, torch.randn_like(x_0))
         x_t = self.method.q_sample(x_0, t, noise)
-        model_output = model(x_t, t, cond)
+        model_output = model(x_t, t, conditions=cond)
         return self.method.loss(model, x_0, x_t, t, model_output, noise)
 
     def sample(self, model_fn: Callable, shape: tuple, device: torch.device, **kwargs) -> Tensor:

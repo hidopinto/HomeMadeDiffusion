@@ -38,6 +38,7 @@ dit:
   depth: 28                 # Reduced from 28 for "simple" version
   num_heads: 16             # hidden_size / 64
   vae_scale_factor: 0.18215 # SDXL Standard
+  cross_attention: True
 
 training:
   # epochs: 500

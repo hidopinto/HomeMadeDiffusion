@@ -8,7 +8,10 @@ import torch
 from timm.models.vision_transformer import Attention
 
 from models.conditioning import SinCosPosEmbed2D
-from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
+from models.layers import AdaLNZeroStrategy
+from models.projectors import AdaLNTextProjector
+from models.cross_attention import CrossAttention
+from models.condition_manager import ConditionOutput, ConditionManager
 from models.models import DiT
 from diffusion.methods.ddpm import DDPM
 
@@ -72,10 +75,9 @@ def text_projector(device: str) -> AdaLNTextProjector:
 # DiT model helpers
 # ---------------------------------------------------------------------------
 
-def _make_dit(device: str, out_channels: int) -> DiT:
+def _make_dit(device: str, out_channels: int, use_cross_attn: bool = False) -> DiT:
     grid_size = INPUT_SIZE // PATCH_SIZE[0]
     pos_emb = SinCosPosEmbed2D(HIDDEN_SIZE, grid_size=grid_size).to(device)
-    txt_proj = AdaLNTextProjector(cond_dim=COND_DIM, hidden_size=HIDDEN_SIZE).to(device)
     return DiT(
         is_video=False,
         input_size=INPUT_SIZE,
@@ -83,7 +85,6 @@ def _make_dit(device: str, out_channels: int) -> DiT:
         in_channels=IN_CHANNELS,
         out_channels=out_channels,
         hidden_size=HIDDEN_SIZE,
-        text_projector=txt_proj,
         frequency_embedding_size=FREQ_EMBED_SIZE,
         max_period=MAX_PERIOD,
         depth=DEPTH,
@@ -91,6 +92,7 @@ def _make_dit(device: str, out_channels: int) -> DiT:
         pos_embedder=pos_emb,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
+        cross_attn_class=CrossAttention if use_cross_attn else None,
     ).to(device)
 
 
@@ -102,6 +104,29 @@ def dit_model(device: str) -> DiT:
 @pytest.fixture
 def dit_model_with_variance(device: str) -> DiT:
     return _make_dit(device, out_channels=2 * IN_CHANNELS)
+
+
+@pytest.fixture
+def dit_model_cross_attn(device: str) -> DiT:
+    return _make_dit(device, out_channels=IN_CHANNELS, use_cross_attn=True)
+
+
+@pytest.fixture
+def condition_output(device: str) -> ConditionOutput:
+    """ConditionOutput with adaLN + one sequence — bypasses ConditionManager."""
+    return ConditionOutput(
+        adaLN=torch.randn(2, HIDDEN_SIZE, device=device),
+        sequences=[(
+            torch.randn(2, 77, HIDDEN_SIZE, device=device),
+            torch.ones(2, 77, dtype=torch.long, device=device),
+        )],
+    )
+
+
+@pytest.fixture
+def condition_output_no_seq(device: str) -> ConditionOutput:
+    """AdaLN-only path (no cross-attention sequences)."""
+    return ConditionOutput(adaLN=torch.randn(2, HIDDEN_SIZE, device=device))
 
 
 # ---------------------------------------------------------------------------

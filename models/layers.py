@@ -4,7 +4,6 @@ from einops import rearrange  # Essential for "patchifying" and video tensor res
 
 __all__ = [
     "masked_mean_pool",
-    "AdaLNTextProjector",
     "PatchEmbed",
     "AdaLNZeroStrategy",
     "FinalLayer",
@@ -15,18 +14,6 @@ def masked_mean_pool(hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
     """Masked mean pool over token dim. hidden_states: (B, T, D), mask: (B, T)"""
     mask = attention_mask.unsqueeze(-1).float()
     return (hidden_states * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-
-
-class AdaLNTextProjector(nn.Module):
-    """Pools text sequence via masked mean, then projects to hidden_size.
-    For cross-attention: swap for a projector that preserves the sequence."""
-    def __init__(self, cond_dim: int, hidden_size: int):
-        super().__init__()
-        self.linear = nn.Linear(cond_dim, hidden_size)
-
-    def forward(self, text: dict) -> Tensor:
-        pooled = masked_mean_pool(text["hidden_states"], text["attention_mask"])
-        return self.linear(pooled)  # (B, hidden_size)
 
 
 class PatchEmbed(nn.Module):

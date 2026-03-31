@@ -12,7 +12,9 @@ __all__ = ["load_frozen_models", "build_model", "METHOD_REGISTRY", "SAMPLER_REGI
 
 from diffusion import DDPM, FlowMatching, DiffusionEngine
 from diffusion.samplers import DDIMSampler, DDPMSampler, FlowMatchingSampler
-from models import AdaLNTextProjector, AdaLNZeroStrategy, DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D
+from models import (AdaLNTextProjector, CrossAttnTextProjector, CrossAttention,
+                    AdaLNZeroStrategy, ConditionManager,
+                    DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,18 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
     else:
         pos_embedder = SinCosPosEmbed2D(config.dit.hidden_size, grid_size)
 
-    text_projector = AdaLNTextProjector(config.dit.cond_dim, config.dit.hidden_size)
+    use_cross_attn = getattr(config.dit, "cross_attention", False)
+
+    projector_pairs = [
+        ("text", AdaLNTextProjector(config.dit.cond_dim, config.dit.hidden_size)),
+    ]
+    if use_cross_attn:
+        projector_pairs.append(
+            ("text", CrossAttnTextProjector(config.dit.cond_dim, config.dit.hidden_size))
+        )
+    # source_keys are a structural config, not saved in state_dict.
+    # Checkpoint reconstruction requires the same projector_pairs order here.
+    condition_manager = ConditionManager(projector_pairs).to(device)
 
     model_core = DiT(
         is_video=config.general.is_video,
@@ -71,7 +84,6 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         in_channels=in_channels,
         out_channels=out_channels,
         hidden_size=config.dit.hidden_size,
-        text_projector=text_projector,
         frequency_embedding_size=config.dit.frequency_embedding_size,
         max_period=config.dit.max_period,
         depth=config.dit.depth,
@@ -79,10 +91,12 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         pos_embedder=pos_embedder,
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
+        cross_attn_class=CrossAttention if use_cross_attn else None,
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
     )
-    model = LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer, engine)
+    model = LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer,
+                            engine, condition_manager=condition_manager)
     num_params = sum(p.numel() for p in model_core.parameters())
     logger.info("DiT built: %.2fM trainable parameters.", num_params / 1e6)
     return model

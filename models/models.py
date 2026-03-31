@@ -1,4 +1,6 @@
-__all__ = ['DiT', 'LatentDiffusion', 'Attention']
+from __future__ import annotations
+
+__all__ = ['DiT', 'LatentDiffusion', 'Attention', 'CrossAttnDiTBlock']
 
 import torch
 from einops import rearrange
@@ -7,7 +9,8 @@ from torch.utils.checkpoint import checkpoint
 from timm.models.vision_transformer import Attention
 
 from models.conditioning import TimestepEmbedder
-from models.layers import PatchEmbed, FinalLayer, AdaLNTextProjector
+from models.condition_manager import ConditionOutput, ConditionManager
+from models.layers import PatchEmbed, FinalLayer
 
 
 class DiTBlock(nn.Module):
@@ -21,12 +24,16 @@ class DiTBlock(nn.Module):
     Zero-initialization of the conditioner linear ensures every block
     acts as an identity mapping at the start of training, giving a
     stable gradient signal regardless of depth.
+
+    ``context`` and ``context_mask`` are accepted but ignored in the base
+    class — present only so ``CrossAttnDiTBlock`` can override without
+    changing the call signature used in ``DiT.forward``.
     """
 
-    def __init__(self, hidden_size, processor, conditioner):
+    def __init__(self, hidden_size: int, processor: nn.Module, conditioner: nn.Module) -> None:
         super().__init__()
         self.conditioner = conditioner  # e.g., AdaLNZeroStrategy
-        self.processor = processor  # e.g., SelfAttention or CrossAttention
+        self.processor = processor      # e.g., timm Attention
         self.norm = nn.LayerNorm(hidden_size, elementwise_affine=False)
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, 4 * hidden_size),
@@ -34,126 +41,161 @@ class DiTBlock(nn.Module):
             nn.Linear(4 * hidden_size, hidden_size)
         )
 
-    def forward(self, x, condition):
-        # 1. Ask the conditioner to prepare the inputs
+    def forward(self, x: Tensor, condition: Tensor,
+                context: Tensor | None = None,
+                context_mask: Tensor | None = None) -> Tensor:
         x_msa, gate_msa, x_mlp, gate_mlp = self.conditioner(self.norm(x), condition)
-
-        # 2. Apply Attention and MLP with their respective gates
         x = x + gate_msa.unsqueeze(1) * self.processor(x_msa)
         x = x + gate_mlp.unsqueeze(1) * self.mlp(x_mlp)
         return x
 
 
+class CrossAttnDiTBlock(DiTBlock):
+    """DiTBlock extended with a cross-attention sub-layer.
+
+    Applies cross-attention between patch tokens (Q) and the pre-projected
+    context sequence (K/V) after self-attention and before the MLP residual.
+    No AdaLN gate on the cross-attn residual — zero-init would silence
+    cross-attention at the start of training, defeating its purpose.
+
+    Falls back to base behaviour when ``context`` is None.
+    """
+
+    def __init__(self, hidden_size: int, processor: nn.Module,
+                 conditioner: nn.Module, cross_attn: nn.Module) -> None:
+        super().__init__(hidden_size, processor, conditioner)
+        self.cross_attn = cross_attn
+        self.norm_cross = nn.LayerNorm(hidden_size, elementwise_affine=False)
+
+    def forward(self, x: Tensor, condition: Tensor,
+                context: Tensor | None = None,
+                context_mask: Tensor | None = None) -> Tensor:
+        x_msa, gate_msa, x_mlp, gate_mlp = self.conditioner(self.norm(x), condition)
+        x = x + gate_msa.unsqueeze(1) * self.processor(x_msa)
+        if context is not None:
+            x = x + self.cross_attn(self.norm_cross(x), context, context_mask)
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(x_mlp)
+        return x
+
+
 class DiT(nn.Module):
-    """Diffusion Transformer (Peebles & Xie, 2022).
+    """Diffusion Transformer (Peebles & Xie, 2022) with hybrid AdaLN + Cross-Attention.
 
     Architecture: patch embedding → sinusoidal positional embedding →
-    N × DiTBlock (AdaLN-Zero) → FinalLayer → unpatchify.
+    N × DiTBlock or CrossAttnDiTBlock (AdaLN-Zero) → FinalLayer → unpatchify.
 
-    Text is fused via AdaLN, not cross-attention: the pooled text embedding
-    is added to the timestep embedding and projected inside each block's
-    conditioner. This keeps the architecture simple while retaining strong
-    text conditioning.
+    Conditioning is decoupled from the model: ``DiT`` receives a ``ConditionOutput``
+    (pre-projected tensors from ``ConditionManager``) and knows nothing about text
+    encoders or projectors. ``adaLN`` is summed into the timestep embedding;
+    ``sequences`` are concatenated into a single (context, context_mask) pair
+    before the block loop.
 
     Supports both 2-D images (B, C, H, W) and 3-D videos (B, C, F, H, W)
-    controlled by the ``is_video`` flag. The positional embedder and patch
-    sizes differ between the two modes.
+    controlled by the ``is_video`` flag.
 
     Optional gradient checkpointing trades compute for VRAM: when enabled,
     activations are recomputed on the backward pass rather than stored.
+    ``ConditionOutput`` is consumed before the block loop so ``checkpoint``
+    always receives plain tensors.
     """
 
     def __init__(
             self,
-            is_video,
-            input_size,
+            is_video: bool,
+            input_size: int,
             patch_size,
-            in_channels,
-            hidden_size,
-            text_projector: AdaLNTextProjector,
-            frequency_embedding_size,
-            max_period,
-            depth,
-            num_heads,
-            pos_embedder,
-            processor_class,  # e.g., Attention from timm
-            conditioner_class,  # e.g., AdaLNZeroStrategy
+            in_channels: int,
+            hidden_size: int,
+            frequency_embedding_size: int,
+            max_period: int,
+            depth: int,
+            num_heads: int,
+            pos_embedder: nn.Module,
+            processor_class: type,
+            conditioner_class: type,
             out_channels: int,
-            gradient_checkpointing=False,
-            use_reentrant=False
-    ):
+            cross_attn_class: type | None = None,
+            gradient_checkpointing: bool = False,
+            use_reentrant: bool = False,
+    ) -> None:
         super().__init__()
         self.is_video = is_video
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.hidden_size = hidden_size
-        self.input_size = input_size  # e.g., 32 for 256px images with VAE (8x downscale)
+        self.input_size = input_size
         self.gradient_checkpointing = gradient_checkpointing
         self.use_reentrant = use_reentrant
 
-        # 1. Embedders
         self.patch_embed = PatchEmbed(patch_size, in_channels, hidden_size)
         self.pos_embedder = pos_embedder
         self.t_embedder = TimestepEmbedder(hidden_size, frequency_embedding_size, max_period)
-        self.text_projector = text_projector
 
-        # 2. Transformer Blocks (Stays the same)
         self.blocks = nn.ModuleList([
-            DiTBlock(
-                hidden_size=hidden_size,
-                processor=processor_class(hidden_size, num_heads=num_heads, qkv_bias=True),
-                conditioner=conditioner_class(hidden_size, hidden_size)
-            ) for _ in range(depth)
+            DiT._build_block(hidden_size, num_heads, processor_class,
+                             conditioner_class, cross_attn_class)
+            for _ in range(depth)
         ])
 
         self.final_layer = FinalLayer(hidden_size, patch_size, out_channels)
 
-    def forward(self, x, t, y: dict | None = None):
+    @staticmethod
+    def _build_block(hidden_size: int, num_heads: int, processor_class: type,
+                     conditioner_class: type,
+                     cross_attn_class: type | None) -> DiTBlock:
+        proc = processor_class(hidden_size, num_heads=num_heads, qkv_bias=True)
+        cond = conditioner_class(hidden_size, hidden_size)
+        if cross_attn_class is not None:
+            return CrossAttnDiTBlock(hidden_size, proc, cond,
+                                     cross_attn_class(hidden_size, num_heads))
+        return DiTBlock(hidden_size, proc, cond)
+
+    def forward(self, x: Tensor, t: Tensor,
+                conditions: ConditionOutput | None = None) -> Tensor:
         """
-        x: (B, C, H, W) or (B, C, F, H, W)
-        t: (B,) timesteps
-        y: dict with "hidden_states" (B, T, D) and "attention_mask" (B, T)
+        x:          (B, C, H, W) or (B, C, F, H, W)
+        t:          (B,) timesteps
+        conditions: pre-projected ConditionOutput from ConditionManager, or None
         """
-        # Capture original dimensions before patch_embed flattens them
         if x.ndim == 5:
             orig_f, orig_h, orig_w = x.shape[2:]
         else:
             orig_f = None
             orig_h, orig_w = x.shape[2:]
 
-        # 1. Patchify & Position
         x = self.patch_embed(x)
         x = x + self.pos_embedder(x)
 
-        # 2. Conditioning
         condition = self.t_embedder(t)
-        if y is not None:
-            condition = condition + self.text_projector(y)
+        context: Tensor | None = None
+        context_mask: Tensor | None = None
 
-        # 3. Blocks
+        if conditions is not None:
+            if conditions.adaLN is not None:
+                condition = condition + conditions.adaLN
+            if conditions.sequences:
+                context = torch.cat([c for c, _ in conditions.sequences], dim=1)
+                context_mask = torch.cat([m for _, m in conditions.sequences], dim=1)
+
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
-                x = checkpoint(block, x, condition, use_reentrant=self.use_reentrant)
+                x = checkpoint(block, x, condition, context, context_mask,
+                               use_reentrant=self.use_reentrant)
             else:
-                x = block(x, condition)
+                x = block(x, condition, context, context_mask)
 
-        # 4. Final Projection
         x = self.final_layer(x, condition)
 
-        # 5. Unpatchify
         c = self.out_channels
-
         if self.is_video:
             p_t, p_h, p_w = self.patch_size
             f_p, h_p, w_p = orig_f // p_t, orig_h // p_h, orig_w // p_w
-
             x = rearrange(x, 'b (f_p h_p w_p) (c p_t p_h p_w) -> b c (f_p p_t) (h_p p_h) (w_p p_w)',
                           c=c, f_p=f_p, h_p=h_p, w_p=w_p, p_t=p_t, p_h=p_h, p_w=p_w)
         else:
             p_h, p_w = self.patch_size
             h_p, w_p = orig_h // p_h, orig_w // p_w
-
             x = rearrange(x, 'b (h_p w_p) (c p_h p_w) -> b c (h_p p_h) (w_p p_w)',
                           c=c, h_p=h_p, w_p=w_p, p_h=p_h, p_w=p_w)
 
@@ -165,15 +207,17 @@ class LatentDiffusion(nn.Module):
 
     Training path (``forward``):
         Takes pre-encoded latents and pre-encoded text embeddings (both produced
-        by ``LatentCachingEngine``). Applies CFG dropout, then delegates to
-        ``DiffusionEngine.compute_loss``. Only DiT weights receive gradients.
+        by ``LatentCachingEngine``). Applies CFG dropout on raw text dicts, then
+        projects via ``ConditionManager`` and delegates to ``DiffusionEngine.compute_loss``.
+        Only DiT and ConditionManager weights receive gradients.
 
     Inference path (``generate``):
         Encodes text on-the-fly, runs the reverse-process sampler via
         ``DiffusionEngine.sample``, and decodes latents with the frozen VAE.
     """
 
-    def __init__(self, config, dit_model, vae, text_encoder, tokenizer, engine):
+    def __init__(self, config, dit_model: DiT, vae, text_encoder, tokenizer,
+                 engine, condition_manager: ConditionManager) -> None:
         super().__init__()
         self.config = config
 
@@ -181,26 +225,23 @@ class LatentDiffusion(nn.Module):
         self.vae = vae
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
-        self.engine = engine  # This replaces 'scheduler' for training logic
+        self.engine = engine
+        self.condition_manager = condition_manager  # trainable — do NOT freeze
 
         self._null_hidden_states: torch.Tensor | None = None
         self._null_attention_mask: torch.Tensor | None = None
 
-        # Freeze the giants
         self.vae.eval().requires_grad_(False)
         self.text_encoder.eval().requires_grad_(False)
 
     @torch.no_grad()
     def encode_inputs(self, pixel_values: Tensor, text_prompts) -> tuple[Tensor, dict]:
-        # 1. Handle Tokenization inside the model to keep train.py clean
         text_inputs = self.tokenizer(
             text_prompts, padding="max_length", max_length=self.tokenizer.model_max_length,
             truncation=True, return_tensors="pt"
         ).to(pixel_values.device)
 
-        # 2. Match VAE/Encoder dtypes (bf16 for RTX 3090)
         pixel_values = pixel_values.to(self.vae.dtype)
-
         latents = self.vae.encode(pixel_values).latent_dist.sample()
         latents = latents * self.config.dit.vae_scale_factor
 
@@ -209,7 +250,6 @@ class LatentDiffusion(nn.Module):
             "hidden_states": hidden_states.float(),
             "attention_mask": text_inputs.attention_mask,
         }
-
         return latents.float(), text_embeds
 
     @torch.no_grad()
@@ -224,6 +264,9 @@ class LatentDiffusion(nn.Module):
             "hidden_states": self._null_hidden_states.expand(batch_size, -1, -1).to(device),
             "attention_mask": self._null_attention_mask.expand(batch_size, -1).to(device),
         }
+
+    def _project(self, text_embeds: dict) -> ConditionOutput:
+        return self.condition_manager({"text": text_embeds})
 
     def forward(self, latents: Tensor, text_embeds: dict) -> Tensor:
         if self.training:
@@ -243,8 +286,8 @@ class LatentDiffusion(nn.Module):
                         text_embeds["attention_mask"]
                     ),
                 }
-        loss = self.engine.compute_loss(self.transformer, latents, text_embeds)
-        return loss
+        projected = self._project(text_embeds)
+        return self.engine.compute_loss(self.transformer, latents, projected)
 
     @torch.no_grad()
     def encode_text(self, prompts: list[str], device: torch.device) -> dict:
@@ -255,10 +298,11 @@ class LatentDiffusion(nn.Module):
         hidden_states = self.text_encoder(tokens.input_ids.to(device))[0]
         return {"hidden_states": hidden_states.float(), "attention_mask": tokens.attention_mask}
 
-    def _cfg_model_fn(self, x_t: Tensor, t: Tensor, cond_embeds: dict,
-                      null_embeds: dict, guidance_scale: float) -> Tensor:
-        eps_u = self.transformer(x_t, t, null_embeds)
-        eps_c = self.transformer(x_t, t, cond_embeds)
+    def _cfg_model_fn(self, x_t: Tensor, t: Tensor,
+                      cond_proj: ConditionOutput, null_proj: ConditionOutput,
+                      guidance_scale: float) -> Tensor:
+        eps_u = self.transformer(x_t, t, conditions=null_proj)
+        eps_c = self.transformer(x_t, t, conditions=cond_proj)
         in_c = self.config.dit.in_channels
         if self.transformer.out_channels > in_c:
             eps_u, _ = torch.split(eps_u, in_c, dim=1)
@@ -283,12 +327,12 @@ class LatentDiffusion(nn.Module):
         collector: "IntermediateCollector | None" = None,
     ) -> Tensor:
         device = next(self.transformer.parameters()).device
-        cond_embeds = self.encode_text(prompts, device)
-        null_embeds = self.encode_text([""] * len(prompts), device)
+        cond_proj = self._project(self.encode_text(prompts, device))
+        null_proj = self._project(self.encode_text([""] * len(prompts), device))
 
         model_kwargs = {
-            "cond_embeds": cond_embeds,
-            "null_embeds": null_embeds,
+            "cond_proj": cond_proj,
+            "null_proj": null_proj,
             "guidance_scale": guidance_scale,
         }
 

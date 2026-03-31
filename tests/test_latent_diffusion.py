@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 from timm.models.vision_transformer import Attention
 
 from models.conditioning import SinCosPosEmbed2D
-from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
+from models.layers import AdaLNZeroStrategy
+from models.projectors import AdaLNTextProjector, CrossAttnTextProjector
+from models.condition_manager import ConditionManager
 from models.models import DiT, LatentDiffusion
 from diffusion.methods.ddpm import DDPM
 from diffusion.engine import DiffusionEngine
@@ -55,7 +57,6 @@ def _make_fake_vae() -> MagicMock:
 def _make_tiny_dit(device: str) -> DiT:
     grid_size = _INPUT // _PATCH[0]
     pos_emb = SinCosPosEmbed2D(_HIDDEN, grid_size=grid_size).to(device)
-    txt_proj = AdaLNTextProjector(cond_dim=_COND_DIM, hidden_size=_HIDDEN).to(device)
     return DiT(
         is_video=False,
         input_size=_INPUT,
@@ -63,7 +64,6 @@ def _make_tiny_dit(device: str) -> DiT:
         in_channels=_IN_CH,
         out_channels=_IN_CH,
         hidden_size=_HIDDEN,
-        text_projector=txt_proj,
         frequency_embedding_size=64,
         max_period=10000,
         depth=2,
@@ -72,6 +72,12 @@ def _make_tiny_dit(device: str) -> DiT:
         processor_class=Attention,
         conditioner_class=AdaLNZeroStrategy,
     ).to(device)
+
+
+def _make_condition_manager(device: str) -> ConditionManager:
+    return ConditionManager([
+        ("text", AdaLNTextProjector(cond_dim=_COND_DIM, hidden_size=_HIDDEN)),
+    ]).to(device)
 
 
 def _make_latent_diffusion(device: str) -> LatentDiffusion:
@@ -89,6 +95,7 @@ def _make_latent_diffusion(device: str) -> LatentDiffusion:
         text_encoder=_make_fake_text_encoder(),
         tokenizer=_make_fake_tokenizer(),
         engine=engine,
+        condition_manager=_make_condition_manager(device),
     ).to(device)
 
 
@@ -169,6 +176,7 @@ def _make_latent_diffusion_for_generate(device: str) -> LatentDiffusion:
         text_encoder=text_encoder,
         tokenizer=tokenizer,
         engine=engine,
+        condition_manager=_make_condition_manager(device),
     ).to(device)
 
 

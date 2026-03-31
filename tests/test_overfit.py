@@ -14,7 +14,8 @@ from torch.optim import AdamW
 from timm.models.vision_transformer import Attention
 
 from models.conditioning import SinCosPosEmbed2D, SinCosPosEmbed3D
-from models.layers import AdaLNZeroStrategy, AdaLNTextProjector
+from models.layers import AdaLNZeroStrategy
+from models.condition_manager import ConditionOutput
 from models.models import DiT
 from diffusion.methods.ddpm import DDPM
 from diffusion.methods.flow_matching import FlowMatching
@@ -38,7 +39,6 @@ _GRAD_STEPS = 10
 def _make_2d_dit(device: str) -> DiT:
     grid_size = 8   # 16 // 2
     pos_emb = SinCosPosEmbed2D(_HIDDEN, grid_size=grid_size).to(device)
-    txt_proj = AdaLNTextProjector(cond_dim=_COND_DIM, hidden_size=_HIDDEN).to(device)
     return DiT(
         is_video=False,
         input_size=16,
@@ -46,7 +46,6 @@ def _make_2d_dit(device: str) -> DiT:
         in_channels=_IN_CH,
         out_channels=_IN_CH,
         hidden_size=_HIDDEN,
-        text_projector=txt_proj,
         frequency_embedding_size=64,
         max_period=10000,
         depth=2,
@@ -63,7 +62,6 @@ def _make_3d_dit(device: str) -> DiT:
     grid_size = 8
     max_frames = 4
     pos_emb = SinCosPosEmbed3D(_HIDDEN, grid_size=grid_size, max_frames=max_frames).to(device)
-    txt_proj = AdaLNTextProjector(cond_dim=_COND_DIM, hidden_size=_HIDDEN).to(device)
     return DiT(
         is_video=True,
         input_size=16,
@@ -71,7 +69,6 @@ def _make_3d_dit(device: str) -> DiT:
         in_channels=_IN_CH,
         out_channels=_IN_CH,
         hidden_size=_HIDDEN,
-        text_projector=txt_proj,
         frequency_embedding_size=64,
         max_period=10000,
         depth=2,
@@ -92,18 +89,19 @@ def _make_fm_engine(device: str) -> DiffusionEngine:
     return DiffusionEngine(method=fm, sampler=FlowMatchingSampler(fm))
 
 
-def _make_cond(B: int, device: str) -> dict:
-    return {
-        "hidden_states": torch.randn(B, 77, _COND_DIM, device=device),
-        "attention_mask": torch.ones(B, 77, dtype=torch.long, device=device),
-    }
+def _make_cond(B: int, device: str) -> ConditionOutput:
+    # Plain tensors (no grad graph) — avoids "backward through graph twice" across loop steps.
+    # The overfit test exercises DiT gradients only; projector weights are not under test here.
+    return ConditionOutput(
+        adaLN=torch.randn(B, _HIDDEN, device=device),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Overfit helper — shared logic for 2D and 3D
 # ---------------------------------------------------------------------------
 
-def _run_overfit(model: DiT, x_0: torch.Tensor, cond: dict, device: str,
+def _run_overfit(model: DiT, x_0: torch.Tensor, cond: ConditionOutput, device: str,
                  make_engine) -> None:
     engine = make_engine(device)
     optimizer = AdamW(model.parameters(), lr=1e-3, weight_decay=0.01)

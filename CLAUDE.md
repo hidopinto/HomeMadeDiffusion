@@ -81,15 +81,24 @@ latents + timestep t + encoder_hidden_states
 | `trainer.py` | `DiTTrainer` — training loop using HuggingFace `Accelerator` (bf16, gradient checkpointing, W&B logging) |
 | `diffusion_engine.py` | `DDPM` — noise schedule, `q_sample()`, `calc_vlb_loss()`; `FlowMatching` — OT conditional flow, MSE velocity loss, optional minibatch OT; `DiffusionEngine` wraps either method with DiT |
 | `samplers.py` | `DDPMSampler`, `DDIMSampler`, `FlowMatchingSampler` — Euler ODE from noise→data |
-| `models/models.py` | `DiT` — full transformer; `LatentDiffusion` — training wrapper; `DiTBlock` — AdaLN-Zero block |
-| `models/layers.py` | `PatchEmbed`, `FinalLayer`, `AdaLNZeroStrategy` |
+| `models/models.py` | `DiT` — pure transformer; `LatentDiffusion` — training wrapper; `DiTBlock` — AdaLN-Zero block; `CrossAttnDiTBlock` — adds cross-attention |
+| `models/condition_manager.py` | `ConditionOutput` — pre-projected conditions dataclass; `ConditionManager` — routes encoder outputs to AdaLN / cross-attn paths |
+| `models/projectors.py` | `AdaLNTextProjector` (role=global, pools → AdaLN); `CrossAttnTextProjector` (role=sequence, preserves sequence) |
+| `models/cross_attention.py` | `CrossAttention` — SDPA-based multi-head cross-attention (Q from patches, K/V from context) |
+| `models/layers.py` | `masked_mean_pool`, `PatchEmbed`, `FinalLayer`, `AdaLNZeroStrategy` |
 | `models/conditioning.py` | `TimestepEmbedder`, `SinCosPosEmbed2D`, `SinCosPosEmbed3D` |
 | `data/` | `LatentDataset`, `LatentCachingEngine`, `build_dataloader` — fully implemented |
 | `config.yaml` | All hyperparameters (model, training, external model IDs) |
 
-### DiT Block (AdaLN-Zero)
+### DiT Conditioning (Hybrid AdaLN + Cross-Attention)
 
-Each `DiTBlock` uses AdaLN-Zero conditioning: a shared MLP projects `(timestep_emb + text_emb)` into scale/shift/gate factors applied to both self-attention and MLP sub-layers. No cross-attention — text is fused via AdaLN.
+`ConditionManager` projects raw encoder outputs and routes them to `ConditionOutput`:
+- `adaLN` (global): pooled text → added to timestep embedding, modulates all blocks via AdaLN-Zero scale/shift/gate.
+- `sequences` (cross-attn): full text token sequence → concatenated and attended by `CrossAttnDiTBlock`.
+
+`DiT` is a pure transformer — it accepts `ConditionOutput` and knows nothing about encoders or projectors. `LatentDiffusion` owns the `ConditionManager` and calls `_project()` before passing to the engine. CFG dropout operates on raw text dicts before projection.
+
+`CrossAttnDiTBlock` extends `DiTBlock` with a cross-attention sub-layer (after self-attn, before MLP). Enable with `dit.cross_attention: True` in config.
 
 ### 2D vs 3D
 
