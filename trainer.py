@@ -59,7 +59,6 @@ class DiTTrainer:
                 for name, module in [
                     ("patch_embed", transformer.patch_embed),
                     ("t_embedder", transformer.t_embedder),
-                    ("text_projector", transformer.text_projector),
                     ("final_layer", transformer.final_layer),
                 ]:
                     norm_sq = sum(
@@ -68,8 +67,39 @@ class DiTTrainer:
                     )
                     grad_log[f"grad_norm/{name}"] = norm_sq ** 0.5
 
+                # condition_manager lives on LatentDiffusion, not DiT
+                condition_manager = unwrapped.condition_manager
+                for proj in condition_manager.projector_modules:
+                    key = "adaln_projector" if getattr(proj, "role", "") == "global" else "crossattn_projector"
+                    norm_sq = sum(
+                        p.grad.data.norm(2).item() ** 2
+                        for p in proj.parameters() if p.grad is not None
+                    )
+                    grad_log[f"grad_norm/{key}"] = norm_sq ** 0.5
+
+                norm_sq = sum(
+                    p.grad.data.norm(2).item() ** 2
+                    for p in condition_manager.parameters() if p.grad is not None
+                )
+                grad_log["grad_norm/condition_manager"] = norm_sq ** 0.5
+
                 grad_norm = sum(v ** 2 for v in grad_log.values()) ** 0.5
                 grad_log["train/grad_norm"] = grad_norm
+
+                # Block-depth bar chart — shows which layers carry the gradient signal
+                if self.accelerator.is_main_process:
+                    block_data = [
+                        [f"block_{i:02d}", grad_log.get(f"grad_norm/block_{i:02d}", 0.0)]
+                        for i in range(len(transformer.blocks))
+                    ]
+                    wandb.log(
+                        {"grad_norm/block_depth": wandb.plot.bar(
+                            wandb.Table(columns=["block", "grad_norm"], data=block_data),
+                            "block", "grad_norm",
+                            title="Gradient Norm by Block Depth",
+                        )},
+                        step=global_step,
+                    )
 
             self.optimizer.step()
             if self.lr_scheduler is not None:
