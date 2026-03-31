@@ -95,6 +95,9 @@ class DDPM(nn.Module):
     def sample_timesteps(self, batch_size: int, device: torch.device) -> Tensor:
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
 
+    def prepare_noise(self, x_0: Tensor, noise: Tensor) -> Tensor:
+        return noise
+
     def q_sample(self, x_0: Tensor, t: Tensor, noise: Tensor) -> Tensor:
         """Standard Forward Process: x_t = sqrt(alpha_bar)*x_0 + sqrt(1-alpha_bar)*noise"""
         # view_shape broadcasts over any ndim (4D images or 5D video tensors)

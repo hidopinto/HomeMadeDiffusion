@@ -14,7 +14,7 @@ diffusion:
       learn_variance: True    # Improved DDPM: predict variance alongside noise
     flow_matching:
       num_timesteps: 1000
-      use_minibatch_ot: True  # set True to enable minibatch OT noise reordering
+      use_minibatch_ot: False  # set True to enable minibatch OT noise reordering
   samplers:
     ddim:
       num_steps: 50

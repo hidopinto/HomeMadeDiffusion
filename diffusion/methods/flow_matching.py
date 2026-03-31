@@ -70,10 +70,13 @@ class FlowMatching(nn.Module):
     def sample_timesteps(self, batch_size: int, device: torch.device) -> Tensor:
         return torch.randint(0, self.num_timesteps, (batch_size,), device=device)
 
+    def prepare_noise(self, x_0: Tensor, noise: Tensor) -> Tensor:
+        if self.use_minibatch_ot:
+            return _ot_reorder_noise(x_0, noise)
+        return noise
+
     def q_sample(self, x_0: Tensor, t: Tensor, noise: Tensor) -> Tensor:
         """OT conditional path: x_t = (1 - t_cont) * noise + t_cont * x_0."""
-        if self.use_minibatch_ot:
-            noise = _ot_reorder_noise(x_0, noise)
         t_cont = t.float() / (self.num_timesteps - 1)
         view_shape = (-1,) + (1,) * (x_0.ndim - 1)
         t_bc = t_cont.view(view_shape)

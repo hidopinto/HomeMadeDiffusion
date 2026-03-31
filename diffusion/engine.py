@@ -30,7 +30,7 @@ class DiffusionEngine(nn.Module):
 
     def compute_loss(self, model: nn.Module, x_0: Tensor, cond: dict) -> Tensor:
         t = self.method.sample_timesteps(x_0.shape[0], x_0.device)
-        noise = torch.randn_like(x_0)
+        noise = self.method.prepare_noise(x_0, torch.randn_like(x_0))
         x_t = self.method.q_sample(x_0, t, noise)
         model_output = model(x_t, t, cond)
         return self.method.loss(model, x_0, x_t, t, model_output, noise)
