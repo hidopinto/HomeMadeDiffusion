@@ -33,7 +33,7 @@ class DiTTrainer:
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
 
-    def train_step(self, batch: dict) -> tuple[torch.Tensor, dict]:
+    def train_step(self, batch: dict, global_step: int) -> tuple[torch.Tensor, dict]:
         latents = batch["latent"]
         text_embeds = batch["text_embed"]
         grad_log: dict[str, float] = {}
@@ -137,7 +137,7 @@ class DiTTrainer:
             t_start = time.time()
 
             for batch in self.dataloader:
-                loss, grad_log = self.train_step(batch)
+                loss, grad_log = self.train_step(batch, global_step)
                 loss_val = loss.item()
                 epoch_loss += loss_val
                 epoch_steps += 1
