@@ -44,47 +44,37 @@ class DiTTrainer:
             if self.accelerator.sync_gradients:
                 clip_norm = getattr(self.config.training, "gradient_clip_norm", None)
                 if clip_norm is not None:
-                    self.accelerator.clip_grad_norm_(self.model.parameters(), clip_norm)
+                    total_norm = self.accelerator.clip_grad_norm_(self.model.parameters(), clip_norm)
+                    grad_log["train/grad_norm"] = total_norm.item()
 
                 unwrapped = self.accelerator.unwrap_model(self.model)
                 transformer = unwrapped.transformer
 
                 for i, block in enumerate(transformer.blocks):
-                    norm_sq = sum(
-                        p.grad.data.norm(2).item() ** 2
-                        for p in block.parameters() if p.grad is not None
-                    )
-                    grad_log[f"grad_norm/block_{i:02d}"] = norm_sq ** 0.5
+                    grads = [p.grad.data.flatten() for p in block.parameters() if p.grad is not None]
+                    if grads:
+                        grad_log[f"grad_norm/block_{i:02d}"] = torch.cat(grads).norm(2).item()
 
                 for name, module in [
                     ("patch_embed", transformer.patch_embed),
                     ("t_embedder", transformer.t_embedder),
                     ("final_layer", transformer.final_layer),
                 ]:
-                    norm_sq = sum(
-                        p.grad.data.norm(2).item() ** 2
-                        for p in module.parameters() if p.grad is not None
-                    )
-                    grad_log[f"grad_norm/{name}"] = norm_sq ** 0.5
+                    grads = [p.grad.data.flatten() for p in module.parameters() if p.grad is not None]
+                    if grads:
+                        grad_log[f"grad_norm/{name}"] = torch.cat(grads).norm(2).item()
 
                 # condition_manager lives on LatentDiffusion, not DiT
                 condition_manager = unwrapped.condition_manager
                 for proj in condition_manager.projector_modules:
                     key = "adaln_projector" if getattr(proj, "role", "") == "global" else "crossattn_projector"
-                    norm_sq = sum(
-                        p.grad.data.norm(2).item() ** 2
-                        for p in proj.parameters() if p.grad is not None
-                    )
-                    grad_log[f"grad_norm/{key}"] = norm_sq ** 0.5
+                    grads = [p.grad.data.flatten() for p in proj.parameters() if p.grad is not None]
+                    if grads:
+                        grad_log[f"grad_norm/{key}"] = torch.cat(grads).norm(2).item()
 
-                norm_sq = sum(
-                    p.grad.data.norm(2).item() ** 2
-                    for p in condition_manager.parameters() if p.grad is not None
-                )
-                grad_log["grad_norm/condition_manager"] = norm_sq ** 0.5
-
-                grad_norm = sum(v ** 2 for v in grad_log.values()) ** 0.5
-                grad_log["train/grad_norm"] = grad_norm
+                grads = [p.grad.data.flatten() for p in condition_manager.parameters() if p.grad is not None]
+                if grads:
+                    grad_log["grad_norm/condition_manager"] = torch.cat(grads).norm(2).item()
 
                 # Block-depth bar chart — shows which layers carry the gradient signal
                 if self.accelerator.is_main_process:
