@@ -68,7 +68,11 @@ def main() -> None:
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
 
     # 2. Optimizer
-    optimizer = AdamW(model.transformer.parameters(), lr=config.training.lr, weight_decay=config.training.weight_decay)
+    optimizer = AdamW(
+        list(model.transformer.parameters()) + list(model.condition_manager.parameters()),
+        lr=config.training.lr,
+        weight_decay=config.training.weight_decay,
+    )
 
     # 3. Build cached dataloader (encodes once, reuses on subsequent runs)
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
