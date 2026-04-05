@@ -14,6 +14,7 @@ from trainer import DiTTrainer
 from model_builder import build_model
 from utils import load_config, setup_logging
 from data import build_dataloader
+from evaluation import EvaluationEngine
 
 
 def _cosine_lr_lambda(
@@ -77,6 +78,18 @@ def main() -> None:
     # 3. Build cached dataloader (encodes once, reuses on subsequent runs)
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
 
+    # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here)
+    eval_engine = None
+    if getattr(config.training, "eval_every_steps", False):
+        val_split = getattr(config.data, "val_split", None)
+        if val_split:
+            val_dataloader = build_dataloader(
+                config, model.vae, model.tokenizer, model.text_encoder, device,
+                split=val_split,
+                shuffle=False,
+            )
+            eval_engine = EvaluationEngine(config, val_dataloader, model, device)
+
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
     model.vae = model.vae.cpu()
@@ -98,7 +111,11 @@ def main() -> None:
     )
 
     # 5. Execute
-    trainer = DiTTrainer(config=config, model=model, dataloader=dataloader, optimizer=optimizer, lr_scheduler=lr_scheduler)
+    trainer = DiTTrainer(
+        config=config, model=model, dataloader=dataloader,
+        optimizer=optimizer, lr_scheduler=lr_scheduler,
+        eval_engine=eval_engine,
+    )
     trainer.fit(epochs=config.training.epochs)
 
 

@@ -10,10 +10,18 @@ from data.cache import CacheManifest, LatentCachingEngine
 from data.dataset import LatentDataset
 
 
-def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataLoader:
+def build_dataloader(
+    config,
+    vae,
+    tokenizer,
+    text_encoder,
+    device: str,
+    split: str | None = None,
+    shuffle: bool = True,
+) -> DataLoader:
     cache_root = Path(config.data.cache_dir)
     dataset_name = config.data.dataset_name
-    split = config.data.split
+    split = split if split is not None else config.data.split
     cache_dir = cache_root / dataset_name.replace("/", "--") / split
     manifest_path = cache_dir / "manifest.json"
 
@@ -77,13 +85,13 @@ def build_dataloader(config, vae, tokenizer, text_encoder, device: str) -> DataL
             device=device,
             encoder_model_ids={"text_embed": config.external_models.text_encoder},
         )
-        engine.run(raw_dataset, cache_root)
+        engine.run(raw_dataset, cache_root, split=split)
 
     dataset = LatentDataset(cache_root, dataset_name, split)
     return DataLoader(
         dataset,
         batch_size=config.training.batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=config.data.num_workers,
         pin_memory=True,
         persistent_workers=True,

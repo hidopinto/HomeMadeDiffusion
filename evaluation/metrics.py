@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+import torch
+from torch import Tensor
+from torch.utils.data import DataLoader
+from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics.image.inception import InceptionScore
+from torchmetrics.multimodal.clip_score import CLIPScore
+
+__all__ = ["EvaluationEngine"]
+
+_MIN_FID_SAMPLES = 2048
+
+
+class EvaluationEngine:
+    """Computes FID, Inception Score, and CLIP Score at eval checkpoints.
+
+    All three torchmetrics objects run on the training device. Real FID
+    statistics are pre-populated once at construction time (while the VAE is
+    still on GPU); a snapshot of those stats is kept so each ``compute()``
+    call only needs to generate fake images rather than re-decode the entire
+    val set.
+    """
+
+    def __init__(
+        self,
+        config,
+        val_dataloader: DataLoader,
+        model,
+        device: str,
+    ) -> None:
+        self.config = config
+        self.device = device
+
+        self.eval_num_samples: int = getattr(config.training, "eval_num_samples", 2048)
+        self.eval_batch_size: int = getattr(config.training, "eval_batch_size", 8)
+        prompts_file: str = getattr(config.training, "eval_prompts_file", "eval_prompts.txt")
+        with open(prompts_file) as f:
+            self.eval_prompts = [line.strip() for line in f if line.strip()]
+
+        sampler_cfg = config.diffusion.samplers[config.diffusion.sampler]
+        self.num_steps: int = getattr(sampler_cfg, "num_steps", 50)
+        self.eta: float = getattr(sampler_cfg, "eta", 0.0)
+        self.guidance_scale: float = getattr(config.training, "guidance_scale", 7.5)
+        self.height: int = getattr(config.training, "inference_height", 512)
+        self.width: int = getattr(config.training, "inference_width", 512)
+        self.scheduler: str = config.diffusion.sampler
+
+        self.fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
+        self.isc = InceptionScore(normalize=True).to(device)
+        self.clip_score = CLIPScore(model_name_or_path="openai/clip-vit-large-patch14").to(device)
+
+        self._populate_real_stats(val_dataloader, model)
+
+    def _populate_real_stats(self, val_dataloader: DataLoader, model) -> None:
+        """Decode val latents and update FID real-image statistics."""
+        scale_factor: float = self.config.dit.vae_scale_factor
+        max_real = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
+        count = 0
+
+        model.vae.eval()
+        with torch.no_grad():
+            for batch in val_dataloader:
+                if count >= max_real:
+                    break
+                latents = batch["latent"].to(self.device)
+                imgs = _decode_latents_to_unit(model.vae, latents, scale_factor)
+                self.fid.update(imgs.to(self.device), real=True)
+                count += imgs.shape[0]
+                torch.cuda.empty_cache()
+
+        # Snapshot real stats so we can restore them after each reset()
+        self._real_sum = self.fid.real_features_sum.clone()
+        self._real_cov_sum = self.fid.real_features_cov_sum.clone()
+        self._real_num = self.fid.real_features_num_samples.clone()
+
+    def _restore_real_stats(self) -> None:
+        self.fid.real_features_sum.copy_(self._real_sum)
+        self.fid.real_features_cov_sum.copy_(self._real_cov_sum)
+        self.fid.real_features_num_samples.copy_(self._real_num)
+
+    @torch.no_grad()
+    def compute(self, model, global_step: int) -> dict[str, float]:
+        """Generate ``eval_num_samples`` images, compute FID / IS / CLIP Score.
+
+        Args:
+            model: Unwrapped ``LatentDiffusion`` instance.
+            global_step: Current training step (unused here; passed for logging symmetry).
+
+        Returns:
+            Dict of metric names → scalar values, or empty dict if not enough
+            samples for reliable FID.
+        """
+        if self.eval_num_samples < _MIN_FID_SAMPLES:
+            print(
+                f"[EvaluationEngine] eval_num_samples={self.eval_num_samples} < {_MIN_FID_SAMPLES}; "
+                "skipping FID (results would be unreliable)."
+            )
+            return {}
+
+        model.transformer.eval()
+
+        fake_imgs: list[Tensor] = []
+        batch_prompts: list[str] = []
+        generated = 0
+        prompt_cycle = 0
+
+        while generated < self.eval_num_samples:
+            remaining = self.eval_num_samples - generated
+            bs = min(self.eval_batch_size, remaining)
+            prompts_batch = [
+                self.eval_prompts[(prompt_cycle + i) % len(self.eval_prompts)]
+                for i in range(bs)
+            ]
+            prompt_cycle += bs
+
+            imgs = model.generate(
+                prompts_batch,
+                height=self.height,
+                width=self.width,
+                num_steps=self.num_steps,
+                guidance_scale=self.guidance_scale,
+                scheduler=self.scheduler,
+                eta=self.eta,
+            )  # (bs, 3, H, W) float32 in [0, 1]
+
+            imgs_cpu = imgs.float().cpu()
+            fake_imgs.append(imgs_cpu)
+            batch_prompts.extend(prompts_batch)
+            generated += bs
+            torch.cuda.empty_cache()
+
+        model.transformer.train()
+
+        # Update IS and CLIP Score incrementally
+        for i, (img_batch, prompt) in enumerate(
+            zip(fake_imgs, _iter_batches(batch_prompts, self.eval_batch_size))
+        ):
+            imgs_gpu = img_batch.to(self.device)
+            self.isc.update(imgs_gpu)
+
+            imgs_uint8 = (imgs_gpu * 255).clamp(0, 255).to(torch.uint8)
+            self.clip_score.update(imgs_uint8, prompt)
+
+        # FID: update fake stats (real stats already populated)
+        all_fake = torch.cat(fake_imgs, dim=0)  # (N, 3, H, W) float32 [0,1]
+        self.fid.update(all_fake.to(self.device), real=False)
+
+        fid_val = self.fid.compute().item()
+        is_mean, is_std = self.isc.compute()
+        clip_val = self.clip_score.compute().item()
+
+        # Reset and restore real stats for next eval call
+        self.fid.reset()
+        self._restore_real_stats()
+        self.isc.reset()
+        self.clip_score.reset()
+
+        return {
+            "eval/fid": fid_val,
+            "eval/is_mean": is_mean.item(),
+            "eval/is_std": is_std.item(),
+            "eval/clip_score": clip_val,
+        }
+
+
+@torch.no_grad()
+def _decode_latents_to_unit(vae, latents: Tensor, scale_factor: float) -> Tensor:
+    """Decode VAE latents to float32 images in [0, 1] on CPU."""
+    scaled = latents / scale_factor
+    imgs = vae.decode(scaled.to(vae.dtype)).sample
+    imgs = (imgs.clamp(-1.0, 1.0) + 1.0) / 2.0
+    return imgs.float().cpu()
+
+
+def _iter_batches(items: list, batch_size: int):
+    """Yield successive batches from a flat list."""
+    for i in range(0, len(items), batch_size):
+        yield items[i : i + batch_size]

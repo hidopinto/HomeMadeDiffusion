@@ -10,7 +10,7 @@ from accelerate import Accelerator
 
 
 class DiTTrainer:
-    def __init__(self, config, model, dataloader, optimizer, lr_scheduler) -> None:
+    def __init__(self, config, model, dataloader, optimizer, lr_scheduler, eval_engine=None) -> None:
         self.config = config
 
         self.accelerator = Accelerator(
@@ -28,6 +28,8 @@ class DiTTrainer:
 
         checkpoint_dir = getattr(config.training, "checkpoint_dir", "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
+
+        self.eval_engine = eval_engine
 
         self.model, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
@@ -108,6 +110,7 @@ class DiTTrainer:
 
         save_every_steps = getattr(self.config.training, "save_every_steps", False)
         infer_every_steps = getattr(self.config.training, "inference_every_steps", False)
+        eval_every_steps = getattr(self.config.training, "eval_every_steps", False)
         checkpoint_dir = getattr(self.config.training, "checkpoint_dir", "checkpoints")
         full_ckpt_dir = Path(checkpoint_dir) / "full_ckpt"
 
@@ -178,6 +181,17 @@ class DiTTrainer:
                             "inference/step": global_step,
                         }, step=global_step)
                         unwrapped.transformer.train()
+
+                    if (
+                        eval_every_steps
+                        and global_step % eval_every_steps == 0
+                        and self.eval_engine is not None
+                    ):
+                        self.accelerator.wait_for_everyone()
+                        unwrapped = self.accelerator.unwrap_model(self.model)
+                        metrics = self.eval_engine.compute(unwrapped, global_step)
+                        if metrics and self.accelerator.is_main_process:
+                            self.accelerator.log(metrics, step=global_step)
 
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0

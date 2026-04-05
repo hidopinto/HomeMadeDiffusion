@@ -55,7 +55,11 @@ training:
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
-  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/pickapic_checkpoints"
+  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
+  eval_every_steps: 5000   # Run FID/IS/CLIP eval every N optimizer steps
+  eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
+  eval_batch_size: 8       # Generation batch size during eval
+  eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
@@ -71,14 +75,13 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
-  # dataset_name: "JotDe/mscoco_100k"
-  # dataset_name: "yuvalkirstain/pickapic_v2"  # gated — needs HF login + ToS acceptance
-  dataset_name: "pickapic-anonymous/pickapic_v1"  # 584k SD-generated images, no auth
-  local_data_dir: "/media/hido-pinto/מחסן/datasets/pickapic-anonymous--pickapic_v1"  # set to load from local Parquet files; unset or null to fetch from Hub
-  split: "train"
+  dataset_name: "pixparse/cc12m-wds"  # ~12M images, pre-hosted on HF Hub as WebDataset shards
+  # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
+  split: "train[:5%]"        # ~600k images; increase once streaming pipeline is ready
+  val_split: "train[99%:]"   # ~120k images used as FID reference (non-overlapping with train)
   image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
-  image_key: "jpg_0"      # JPEG bytes; converted to PIL in cache.py
-  caption_key: "caption"  # scalar string
+  image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in cache.py
+  caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
   encoding_batch_size: 64
   num_workers: 8

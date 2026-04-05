@@ -82,9 +82,9 @@ class LatentCachingEngine:
             torch.save(sample, tmp)
             tmp.rename(cache_dir / key / f"{idx:06d}.pt")
 
-    def run(self, dataset, cache_root: Path) -> Path:
+    def run(self, dataset, cache_root: Path, split: str | None = None) -> Path:
         dataset_name = self.config.data.dataset_name
-        split = self.config.data.split
+        split = split if split is not None else self.config.data.split
         cache_dir = cache_root / dataset_name.replace("/", "--") / split
 
         latent_dir = cache_dir / "latents"
