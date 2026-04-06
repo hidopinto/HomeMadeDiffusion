@@ -87,7 +87,7 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 128    # safe during caching (no DiT in memory): ~8 GiB VAE intermediate; was 32 → 2 GiB
+  encoding_batch_size: 45     # disable_slicing with batch=32 → peak ~8-9 GB; batch=64 needs ~25 GB (OOM)
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)

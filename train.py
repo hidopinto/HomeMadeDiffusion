@@ -75,18 +75,14 @@ def main() -> None:
 
     # 1. Build model (frozen giants + DiT + diffusion engine)
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
+    model.vae.enable_slicing()
     mode = getattr(config.data, "mode", "cache")
-    if mode == "cache_then_train":
-        # Disable slicing during the caching pass: slicing serializes the batch into single-image
-        # calls, keeping GPU utilization near 0%. With 24 GB VRAM and no DiT forward pass active
-        # during caching, the full batch fits comfortably.
-        model.vae.disable_slicing()
-    else:
-        model.vae.enable_slicing()
 
-    # Compile frozen encoders for faster VAE caching pass and per-step CLIP encoding
+    # Compile text encoder for faster per-step CLIP encoding during training.
+    # VAE is intentionally not compiled: it only runs during the caching pass (no backward),
+    # and torch.compile's CUDA graph recording would keep all VAE activations in memory
+    # simultaneously, causing OOM at batch=64+ on a 24 GB card.
     if torch.cuda.is_available():
-        model.vae = torch.compile(model.vae, mode="reduce-overhead")
         model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
 
     # 2. Optimizer
@@ -97,7 +93,20 @@ def main() -> None:
     )
 
     # 3. Build dataloader — in cache_then_train mode this runs the caching pass first (blocking)
+    if mode == "cache_then_train":
+        # Offload DiT + condition_manager to CPU before caching: frees ~1.3 GB on GPU so the VAE
+        # can encode full batches (disable_slicing) without OOM. Peak VRAM during caching is
+        # ~17 GB (batch=64) vs 23.5 GB available. DiT is moved back to GPU after caching.
+        model.transformer.cpu()
+        model.condition_manager.cpu()
+        torch.cuda.empty_cache()
+        model.vae.disable_slicing()
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
+    if mode == "cache_then_train":
+        model.vae.enable_slicing()
+        model.transformer.to(device)
+        model.condition_manager.to(device)
+        torch.cuda.empty_cache()
 
     if args.cache_only:
         print("--cache-only: caching complete. Exiting.")
