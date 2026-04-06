@@ -78,18 +78,12 @@ def main() -> None:
     model.vae.enable_slicing()
     mode = getattr(config.data, "mode", "cache")
 
-    # Compile text encoder for faster per-step CLIP encoding during training.
-    # VAE is intentionally not compiled: it only runs during the caching pass (no backward),
-    # and torch.compile's CUDA graph recording would keep all VAE activations in memory
-    # simultaneously, causing OOM at batch=64+ on a 24 GB card.
-    if torch.cuda.is_available():
-        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
-
     # 2. Optimizer
     optimizer = AdamW(
         list(model.transformer.parameters()) + list(model.condition_manager.parameters()),
         lr=config.training.lr,
         weight_decay=config.training.weight_decay,
+        eps=1e-7,
     )
 
     # 3. Build dataloader — in cache_then_train mode this runs the caching pass first (blocking)
@@ -111,6 +105,12 @@ def main() -> None:
     if args.cache_only:
         print("--cache-only: caching complete. Exiting.")
         return
+
+    # Compile text encoder after the caching pass: CUDA graphs no longer occupy VRAM during
+    # encoding, and the compiled model is still available for training inference calls.
+    # VAE is intentionally not compiled (see original comment above).
+    if torch.cuda.is_available():
+        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
 
     # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here)
     torch.cuda.empty_cache()

@@ -52,49 +52,51 @@ class DiTTrainer:
                     total_norm = self.accelerator.clip_grad_norm_(self.model.parameters(), clip_norm)
                     grad_log["train/grad_norm"] = total_norm.item()
 
-                unwrapped = self.accelerator.unwrap_model(self.model)
-                transformer = unwrapped.transformer
+                grad_norm_interval = getattr(self.config.training, "grad_norm_log_every_steps", 100)
+                if global_step % grad_norm_interval == 0:
+                    unwrapped = self.accelerator.unwrap_model(self.model)
+                    transformer = unwrapped.transformer
 
-                for i, block in enumerate(transformer.blocks):
-                    grads = [p.grad.data.flatten() for p in block.parameters() if p.grad is not None]
+                    for i, block in enumerate(transformer.blocks):
+                        grads = [p.grad.data.flatten() for p in block.parameters() if p.grad is not None]
+                        if grads:
+                            grad_log[f"grad_norm/block_{i:02d}"] = torch.cat(grads).norm(2).item()
+
+                    for name, module in [
+                        ("patch_embed", transformer.patch_embed),
+                        ("t_embedder", transformer.t_embedder),
+                        ("final_layer", transformer.final_layer),
+                    ]:
+                        grads = [p.grad.data.flatten() for p in module.parameters() if p.grad is not None]
+                        if grads:
+                            grad_log[f"grad_norm/{name}"] = torch.cat(grads).norm(2).item()
+
+                    # condition_manager lives on LatentDiffusion, not DiT
+                    condition_manager = unwrapped.condition_manager
+                    for proj in condition_manager.projector_modules:
+                        key = "adaln_projector" if getattr(proj, "role", "") == "global" else "crossattn_projector"
+                        grads = [p.grad.data.flatten() for p in proj.parameters() if p.grad is not None]
+                        if grads:
+                            grad_log[f"grad_norm/{key}"] = torch.cat(grads).norm(2).item()
+
+                    grads = [p.grad.data.flatten() for p in condition_manager.parameters() if p.grad is not None]
                     if grads:
-                        grad_log[f"grad_norm/block_{i:02d}"] = torch.cat(grads).norm(2).item()
+                        grad_log["grad_norm/condition_manager"] = torch.cat(grads).norm(2).item()
 
-                for name, module in [
-                    ("patch_embed", transformer.patch_embed),
-                    ("t_embedder", transformer.t_embedder),
-                    ("final_layer", transformer.final_layer),
-                ]:
-                    grads = [p.grad.data.flatten() for p in module.parameters() if p.grad is not None]
-                    if grads:
-                        grad_log[f"grad_norm/{name}"] = torch.cat(grads).norm(2).item()
-
-                # condition_manager lives on LatentDiffusion, not DiT
-                condition_manager = unwrapped.condition_manager
-                for proj in condition_manager.projector_modules:
-                    key = "adaln_projector" if getattr(proj, "role", "") == "global" else "crossattn_projector"
-                    grads = [p.grad.data.flatten() for p in proj.parameters() if p.grad is not None]
-                    if grads:
-                        grad_log[f"grad_norm/{key}"] = torch.cat(grads).norm(2).item()
-
-                grads = [p.grad.data.flatten() for p in condition_manager.parameters() if p.grad is not None]
-                if grads:
-                    grad_log["grad_norm/condition_manager"] = torch.cat(grads).norm(2).item()
-
-                # Block-depth bar chart — shows which layers carry the gradient signal (every 100 steps)
-                if self.accelerator.is_main_process and global_step % 100 == 0:
-                    block_data = [
-                        [f"block_{i:02d}", grad_log.get(f"grad_norm/block_{i:02d}", 0.0)]
-                        for i in range(len(transformer.blocks))
-                    ]
-                    wandb.log(
-                        {"grad_norm/block_depth": wandb.plot.bar(
-                            wandb.Table(columns=["block", "grad_norm"], data=block_data),
-                            "block", "grad_norm",
-                            title="Gradient Norm by Block Depth",
-                        )},
-                        step=global_step,
-                    )
+                    # Block-depth bar chart — shows which layers carry the gradient signal
+                    if self.accelerator.is_main_process:
+                        block_data = [
+                            [f"block_{i:02d}", grad_log.get(f"grad_norm/block_{i:02d}", 0.0)]
+                            for i in range(len(transformer.blocks))
+                        ]
+                        wandb.log(
+                            {"grad_norm/block_depth": wandb.plot.bar(
+                                wandb.Table(columns=["block", "grad_norm"], data=block_data),
+                                "block", "grad_norm",
+                                title="Gradient Norm by Block Depth",
+                            )},
+                            step=global_step,
+                        )
 
             self.optimizer.step()
             if self.lr_scheduler is not None:

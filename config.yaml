@@ -45,7 +45,7 @@ training:
   epochs: 2   # 2 × 125K = 250K total steps; warmup ends at step 12.5K, cosine decay completes at 250K
   lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
-  warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
+  warmup_ratio: 0.10                  # fraction of total optimizer steps for warmup (ignored by "constant")
   lr_end: 1.0e-6              # The floor of the cosine decay
   weight_decay: 0.05
   mixed_precision: "bf16"   # Best for RTX 3090
@@ -54,6 +54,7 @@ training:
   batch_size: 128            # increased from 96; training-batch tensor is tiny (~37 MB), fewer steps/epoch
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
+  grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
   eval_every_steps: 5000   # Run FID/IS/CLIP eval every N optimizer steps
@@ -61,7 +62,7 @@ training:
   eval_batch_size: 32      # Generation batch size during eval; no gradients → safe on 3090 (was 16)
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
-  inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
+  inference_every_steps: 2000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
   inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
   inference_height: 512    # must match data.image_size
