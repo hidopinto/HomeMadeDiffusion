@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from torch.utils.data import DataLoader
 from data.cache import CacheManifest, LatentCachingEngine
 from data.dataset import LatentDataset
 from data.streaming import StreamingLatentDataset
+
+
+def _is_writable(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return os.access(path, os.W_OK)
+    except OSError:
+        return False
 
 
 def build_dataloader(
@@ -125,7 +134,20 @@ def _build_streaming_dataloader(
     split = split if split is not None else config.data.split
     # streaming=True: no download, no disk I/O — samples arrive on-the-fly from HF Hub shards
     # NOTE: num_proc and DownloadConfig are not valid kwargs for streaming datasets
-    raw_dataset = load_dataset(config.data.dataset_name, split=split, streaming=True)
+    # Resolve a writable HF metadata cache dir; even streaming mode writes a few KB of builder
+    # metadata, so we must avoid paths that may be unmounted or read-only.
+    _default_hf_cache = Path.home() / ".cache" / "huggingface" / "datasets"
+    hf_cache = Path(
+        os.environ.get("HF_DATASETS_CACHE")
+        or os.environ.get("HF_HOME")
+        or _default_hf_cache
+    )
+    if not _is_writable(hf_cache):
+        hf_cache = _default_hf_cache
+        hf_cache.mkdir(parents=True, exist_ok=True)
+    raw_dataset = load_dataset(
+        config.data.dataset_name, split=split, streaming=True, cache_dir=str(hf_cache)
+    )
     # Optional shuffle buffer: add config.data.shuffle_buffer_size and call
     # raw_dataset = raw_dataset.shuffle(buffer_size=..., seed=42) here when needed
     dataset = StreamingLatentDataset(
