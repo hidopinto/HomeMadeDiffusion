@@ -82,6 +82,7 @@ data:
   # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
   split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
   val_split: "train[99%:]"   # ~120k images used as FID reference (non-overlapping with train)
+  val_streaming_samples: 2048  # streaming fallback: .take(N) when percent slices unsupported
   image_size: 512   # constraint: image_size / 8 == dit.input_size (512 / 8 = 64 ✓)
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds

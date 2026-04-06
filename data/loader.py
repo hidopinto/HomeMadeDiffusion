@@ -132,6 +132,17 @@ def _build_streaming_dataloader(
     split: str | None,
 ) -> DataLoader:
     split = split if split is not None else config.data.split
+    # Streaming datasets do not support percent-slice notation (e.g. "train[99%:]").
+    # Strip any [...] suffix and fall back to .take() on a fixed sample count instead.
+    _take_n: int | None = None
+    if "[" in split:
+        base_split = split[:split.index("[")]
+        _take_n = getattr(config.data, "val_streaming_samples", 2048)
+        print(
+            f"[loader] Streaming mode does not support split slice '{split}'. "
+            f"Loading base split '{base_split}' and capping at {_take_n} samples via .take()."
+        )
+        split = base_split
     # streaming=True: no download, no disk I/O — samples arrive on-the-fly from HF Hub shards
     # NOTE: num_proc and DownloadConfig are not valid kwargs for streaming datasets
     # Resolve a writable HF metadata cache dir; even streaming mode writes a few KB of builder
@@ -148,6 +159,14 @@ def _build_streaming_dataloader(
     raw_dataset = load_dataset(
         config.data.dataset_name, split=split, streaming=True, cache_dir=str(hf_cache)
     )
+    if _take_n is not None:
+        raw_dataset = raw_dataset.take(_take_n)
+    else:
+        # Skip the samples reserved for validation so train/val sets are non-overlapping.
+        val_split_str = getattr(config.data, "val_split", None)
+        if val_split_str and "[" in val_split_str:
+            skip_n = getattr(config.data, "val_streaming_samples", 2048)
+            raw_dataset = raw_dataset.skip(skip_n)
     # Optional shuffle buffer: add config.data.shuffle_buffer_size and call
     # raw_dataset = raw_dataset.shuffle(buffer_size=..., seed=42) here when needed
     dataset = StreamingLatentDataset(
