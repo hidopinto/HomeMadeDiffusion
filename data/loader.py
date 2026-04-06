@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 from data.cache import CacheManifest, LatentCachingEngine
 from data.dataset import LatentDataset
+from data.streaming import StreamingLatentDataset
 
 
 def build_dataloader(
@@ -18,6 +19,21 @@ def build_dataloader(
     device: str,
     split: str | None = None,
     shuffle: bool = True,
+) -> DataLoader:
+    mode = getattr(config.data, "mode", "cache")
+    if mode == "streaming":
+        return _build_streaming_dataloader(config, vae, tokenizer, text_encoder, device, split)
+    return _build_cached_dataloader(config, vae, tokenizer, text_encoder, device, split, shuffle)
+
+
+def _build_cached_dataloader(
+    config,
+    vae,
+    tokenizer,
+    text_encoder,
+    device: str,
+    split: str | None,
+    shuffle: bool,
 ) -> DataLoader:
     cache_root = Path(config.data.cache_dir)
     dataset_name = config.data.dataset_name
@@ -95,4 +111,40 @@ def build_dataloader(
         num_workers=config.data.num_workers,
         pin_memory=True,
         persistent_workers=True,
+    )
+
+
+def _build_streaming_dataloader(
+    config,
+    vae,
+    tokenizer,
+    text_encoder,
+    device: str,
+    split: str | None,
+) -> DataLoader:
+    split = split if split is not None else config.data.split
+    # streaming=True: no download, no disk I/O — samples arrive on-the-fly from HF Hub shards
+    # NOTE: num_proc and DownloadConfig are not valid kwargs for streaming datasets
+    raw_dataset = load_dataset(config.data.dataset_name, split=split, streaming=True)
+    # Optional shuffle buffer: add config.data.shuffle_buffer_size and call
+    # raw_dataset = raw_dataset.shuffle(buffer_size=..., seed=42) here when needed
+    dataset = StreamingLatentDataset(
+        hf_dataset=raw_dataset,
+        vae=vae,
+        tokenizer=tokenizer,
+        text_encoders={"text_embed": text_encoder},
+        image_key=config.data.image_key,
+        caption_key=config.data.caption_key,
+        image_size=config.data.image_size,
+        vae_scale_factor=config.dit.vae_scale_factor,
+        encoding_batch_size=config.data.encoding_batch_size,
+        device=device,
+    )
+    # num_workers=0: GPU encoding cannot be forked into subprocess workers
+    # pin_memory=False: ineffective with num_workers=0
+    return DataLoader(
+        dataset,
+        batch_size=config.training.batch_size,
+        num_workers=0,
+        pin_memory=False,
     )

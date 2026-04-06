@@ -1,4 +1,3 @@
-import io
 import json
 from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, asdict
@@ -6,12 +5,10 @@ from pathlib import Path
 
 __all__ = ["CacheManifest", "LatentCachingEngine"]
 
-import numpy as np
 import torch
-from einops import rearrange
-from PIL import Image
 from torch import Tensor
 
+from data.encoding import encode_batch
 from data.protocols import LatentEncoderProtocol, TextEncoderProtocol
 
 
@@ -151,54 +148,16 @@ class LatentCachingEngine:
         manifest.save(cache_dir / "manifest.json")
         return cache_dir
 
-    @torch.no_grad()
     def _encode_batch(
         self, images: list, captions: list[str]
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        image_size = self.config.data.image_size
-
-        # --- Image preprocessing ---
-        pixel_arrays = []
-        for img in images:
-            if isinstance(img, bytes):
-                img = Image.open(io.BytesIO(img))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            w, h = img.size
-            min_dim = min(w, h)
-            left = (w - min_dim) // 2
-            top = (h - min_dim) // 2
-            img = img.crop((left, top, left + min_dim, top + min_dim))
-            img = img.resize((image_size, image_size), Image.LANCZOS)
-            arr = np.array(img, dtype=np.float32) / 255.0
-            arr = (arr - 0.5) / 0.5
-            pixel_arrays.append(arr)
-
-        pixel_tensor = torch.from_numpy(np.stack(pixel_arrays))  # (B, H, W, 3)
-        pixel_tensor = rearrange(pixel_tensor, 'b h w c -> b c h w')
-        pixel_tensor = pixel_tensor.to(self.device).to(self.vae.dtype)
-
-        latents = self.vae.encode(pixel_tensor).latent_dist.sample()
-        latents = latents * self.config.dit.vae_scale_factor
-        latents = latents.float()
-
-        # --- Text encoding ---
-        text_inputs = self.tokenizer(
+    ) -> tuple[Tensor, dict[str, dict[str, Tensor]]]:
+        return encode_batch(
+            images,
             captions,
-            max_length=77,
-            padding="max_length",
-            truncation=True,
-            return_tensors="pt",
+            self.vae,
+            self.tokenizer,
+            self.text_encoders,
+            self.config.data.image_size,
+            self.config.dit.vae_scale_factor,
+            self.device,
         )
-        input_ids = text_inputs.input_ids.to(self.device)
-        attention_mask = text_inputs.attention_mask  # (B, 77)
-
-        text_embeds: dict[str, dict[str, Tensor]] = {}
-        for key, encoder in self.text_encoders.items():
-            hidden_states = encoder(input_ids)[0]  # (B, 77, 768)
-            text_embeds[key] = {
-                "hidden_states": hidden_states.float(),  # (B, 77, 768)
-                "attention_mask": attention_mask,        # (B, 77)
-            }
-
-        return latents, text_embeds

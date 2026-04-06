@@ -92,13 +92,17 @@ def main() -> None:
 
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
-    model.vae = model.vae.cpu()
-    model.text_encoder = model.text_encoder.cpu()
+    # In streaming mode VAE and text encoder must remain on GPU — they encode every training batch
+    if getattr(config.data, "mode", "cache") != "streaming":
+        model.vae = model.vae.cpu()
+        model.text_encoder = model.text_encoder.cpu()
     torch.cuda.empty_cache()
 
     # 4. Build LR scheduler
     grad_accum_steps: int = getattr(config.training, "gradient_accumulation_steps", 1)
-    total_training_steps: int = (len(dataloader) // grad_accum_steps) * config.training.epochs
+    # streaming DataLoaders wrap an IterableDataset with no __len__; use steps_per_epoch from config
+    steps_per_epoch: int = getattr(config.data, "steps_per_epoch", None) or len(dataloader)
+    total_training_steps: int = (steps_per_epoch // grad_accum_steps) * config.training.epochs
     num_warmup_steps: int = round(config.training.warmup_ratio * total_training_steps)
 
     lr_scheduler = build_lr_scheduler(

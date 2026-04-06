@@ -51,7 +51,7 @@ training:
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 256
+  batch_size: 96             # reduced from 256 for streaming mode (VAE+CLIP stay on GPU, ~1.5 GB overhead)
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
@@ -75,18 +75,21 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
+  mode: "streaming"          # "cache" (encode once, load from disk) | "streaming" (encode on-the-fly)
+  steps_per_epoch: 125000    # required for streaming mode LR schedule: ~12M samples / batch_size 96
+                             # unused in cache mode (len(dataloader) is used instead)
   dataset_name: "pixparse/cc12m-wds"  # ~12M images, pre-hosted on HF Hub as WebDataset shards
   # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
-  split: "train[:5%]"        # ~600k images; increase once streaming pipeline is ready
+  split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
   val_split: "train[99%:]"   # ~120k images used as FID reference (non-overlapping with train)
-  image_size: 512   # constraint: image_size / (2*grid_size) == dit.input_size
-  image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in cache.py
+  image_size: 512   # constraint: image_size / 8 == dit.input_size (512 / 8 = 64 ✓)
+  image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 64
-  num_workers: 8
-  dataset_num_proc: 4       # parallel workers for load_dataset() download (lower = less bandwidth saturation)
-  dataset_max_retries: 5    # outer retry attempts on network failure (exponential backoff)
+  encoding_batch_size: 96    # micro-batch size for on-the-fly GPU encoding; match training.batch_size
+  num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
+  dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
+  dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
 
 inference:
   out_dir: "/media/hido-pinto/מחסן/outputs"
