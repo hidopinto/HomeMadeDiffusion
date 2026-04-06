@@ -31,6 +31,9 @@ class DiTTrainer:
 
         self.eval_engine = eval_engine
 
+        if torch.cuda.is_available():
+            self.model = torch.compile(self.model, mode="reduce-overhead")
+
         self.model, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
@@ -78,8 +81,8 @@ class DiTTrainer:
                 if grads:
                     grad_log["grad_norm/condition_manager"] = torch.cat(grads).norm(2).item()
 
-                # Block-depth bar chart — shows which layers carry the gradient signal
-                if self.accelerator.is_main_process:
+                # Block-depth bar chart — shows which layers carry the gradient signal (every 100 steps)
+                if self.accelerator.is_main_process and global_step % 100 == 0:
                     block_data = [
                         [f"block_{i:02d}", grad_log.get(f"grad_norm/block_{i:02d}", 0.0)]
                         for i in range(len(transformer.blocks))

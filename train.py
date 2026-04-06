@@ -1,3 +1,4 @@
+import argparse
 import math
 from functools import partial
 
@@ -55,6 +56,13 @@ def build_lr_scheduler(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cache-only", action="store_true",
+        help="Run the VAE caching pass and exit without training (cache_then_train mode only).",
+    )
+    args = parser.parse_args()
+
     setup_logging()
     load_dotenv()
     huggingface_hub.login()
@@ -69,6 +77,11 @@ def main() -> None:
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
     model.vae.enable_slicing()
 
+    # Compile frozen encoders for faster VAE caching pass and per-step CLIP encoding
+    if torch.cuda.is_available():
+        model.vae = torch.compile(model.vae, mode="reduce-overhead")
+        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
+
     # 2. Optimizer
     optimizer = AdamW(
         list(model.transformer.parameters()) + list(model.condition_manager.parameters()),
@@ -76,8 +89,12 @@ def main() -> None:
         weight_decay=config.training.weight_decay,
     )
 
-    # 3. Build cached dataloader (encodes once, reuses on subsequent runs)
+    # 3. Build dataloader — in cache_then_train mode this runs the caching pass first (blocking)
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
+
+    if args.cache_only:
+        print("--cache-only: caching complete. Exiting.")
+        return
 
     # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here)
     torch.cuda.empty_cache()
@@ -94,8 +111,12 @@ def main() -> None:
 
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
-    # In streaming mode VAE and text encoder must remain on GPU — they encode every training batch
-    if getattr(config.data, "mode", "cache") != "streaming":
+    mode = getattr(config.data, "mode", "cache")
+    if mode == "streaming":
+        pass  # VAE and text_encoder must stay on GPU — they encode every training batch
+    elif mode == "cache_then_train":
+        model.vae = model.vae.cpu()  # VAE no longer needed; text_encoder stays on GPU for VaeCachedDataset
+    else:
         model.vae = model.vae.cpu()
         model.text_encoder = model.text_encoder.cpu()
     torch.cuda.empty_cache()

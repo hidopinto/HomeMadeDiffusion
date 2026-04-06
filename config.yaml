@@ -58,7 +58,7 @@ training:
   checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
   eval_every_steps: 5000   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
-  eval_batch_size: 16      # Generation batch size during eval; no gradients → safe on 3090
+  eval_batch_size: 32      # Generation batch size during eval; no gradients → safe on 3090 (was 16)
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
@@ -75,9 +75,9 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
-  mode: "streaming"          # "cache" (encode once, load from disk) | "streaming" (encode on-the-fly)
-  steps_per_epoch: 125000    # required for streaming mode LR schedule: ~12M samples / batch_size 96
-                             # unused in cache mode (len(dataloader) is used instead)
+  mode: "cache_then_train"   # "cache" | "streaming" | "cache_then_train" (VAE cache pass then train)
+  vae_cache_dir: "/media/hido-pinto/מחסן/vae_cache"  # latents + captions stored here (~384 GB)
+  steps_per_epoch: 125000    # used for streaming/cache_then_train LR schedule; set to null to use len(dataloader)
   dataset_name: "pixparse/cc12m-wds"  # ~12M images, pre-hosted on HF Hub as WebDataset shards
   # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
   split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
@@ -87,7 +87,7 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 32     # VAE UNet first down-block at batch=64 allocates 4 GiB intermediate; 32 → 2 GiB, safe on 3090
+  encoding_batch_size: 128    # safe during caching (no DiT in memory): ~8 GiB VAE intermediate; was 32 → 2 GiB
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)

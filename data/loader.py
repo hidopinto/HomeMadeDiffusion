@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from data.cache import CacheManifest, LatentCachingEngine
 from data.dataset import LatentDataset
 from data.streaming import StreamingLatentDataset
+from data.vae_cache import VaeCacheManifest, VaeCachingEngine, VaeCachedDataset
 
 
 def _is_writable(path: Path) -> bool:
@@ -32,6 +33,8 @@ def build_dataloader(
     mode = getattr(config.data, "mode", "cache")
     if mode == "streaming":
         return _build_streaming_dataloader(config, vae, tokenizer, text_encoder, device, split)
+    if mode == "cache_then_train":
+        return _build_cache_then_train_dataloader(config, vae, tokenizer, text_encoder, device, split, shuffle)
     return _build_cached_dataloader(config, vae, tokenizer, text_encoder, device, split, shuffle)
 
 
@@ -183,6 +186,85 @@ def _build_streaming_dataloader(
     )
     # num_workers=0: GPU encoding cannot be forked into subprocess workers
     # pin_memory=False: ineffective with num_workers=0
+    return DataLoader(
+        dataset,
+        batch_size=config.training.batch_size,
+        num_workers=0,
+        pin_memory=False,
+    )
+
+
+def _build_cache_then_train_dataloader(
+    config,
+    vae,
+    tokenizer,
+    text_encoder,
+    device: str,
+    split: str | None,
+    shuffle: bool,
+) -> DataLoader:
+    """
+    Runs a one-time VAE caching pass on first launch, then serves training batches from disk.
+
+    On first run: streams the HF dataset, encodes every image with the frozen VAE, and saves
+    latents + captions to vae_cache_dir. Subsequent runs skip straight to loading from cache.
+    CLIP text encoding still runs per-step (fast ~0.3-0.5s vs VAE's ~3s).
+    """
+    split = split if split is not None else config.data.split
+
+    # Streaming datasets do not support percent-slice notation — strip and use .take() instead.
+    take_n: int | None = None
+    if "[" in split:
+        base_split = split[:split.index("[")]
+        take_n = getattr(config.data, "val_streaming_samples", 2048)
+        print(
+            f"[loader] cache_then_train: split slice '{split}' not supported in streaming. "
+            f"Loading '{base_split}' and capping at {take_n} samples."
+        )
+        split = base_split
+
+    vae_cache_root = Path(config.data.vae_cache_dir)
+    cache_dir = vae_cache_root / config.data.dataset_name.replace("/", "--") / split
+    manifest_path = cache_dir / "manifest.json"
+
+    cache_valid = False
+    if manifest_path.exists():
+        try:
+            stored = VaeCacheManifest.load(manifest_path)
+            cache_valid = stored.matches(config)
+        except Exception:
+            cache_valid = False
+
+    if not cache_valid:
+        print("[loader] VAE cache not found or config mismatch — running caching pass ...")
+        _default_hf_cache = Path.home() / ".cache" / "huggingface" / "datasets"
+        hf_cache = Path(
+            os.environ.get("HF_DATASETS_CACHE")
+            or os.environ.get("HF_HOME")
+            or _default_hf_cache
+        )
+        if not _is_writable(hf_cache):
+            hf_cache = _default_hf_cache
+            hf_cache.mkdir(parents=True, exist_ok=True)
+        raw_dataset = load_dataset(
+            config.data.dataset_name, split=split, streaming=True, cache_dir=str(hf_cache)
+        )
+        if take_n is not None:
+            raw_dataset = raw_dataset.take(take_n)
+        engine = VaeCachingEngine(vae=vae, config=config, device=device)
+        engine.run(raw_dataset, vae_cache_root, split=split)
+        print("[loader] Caching complete. Starting training from cache ...")
+    else:
+        print(f"[loader] VAE cache valid ({VaeCacheManifest.load(manifest_path).num_samples:,} samples). Loading from disk ...")
+
+    dataset = VaeCachedDataset(
+        cache_dir=cache_dir,
+        tokenizer=tokenizer,
+        text_encoders={"text_embed": text_encoder},
+        config=config,
+        device=device,
+    )
+    # num_workers=0: CLIP runs on GPU and cannot cross subprocess fork boundaries
     return DataLoader(
         dataset,
         batch_size=config.training.batch_size,
