@@ -42,7 +42,7 @@ dit:
 
 training:
   # epochs: 500
-  epochs: 50  # 584k/320 ≈ 1,825 steps/epoch → ~91k total steps ≈ 21–25 hours
+  epochs: 2   # 2 × 125K = 250K total steps; warmup ends at step 12.5K, cosine decay completes at 250K
   lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
   warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
