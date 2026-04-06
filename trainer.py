@@ -181,6 +181,7 @@ class DiTTrainer:
                             "inference/step": global_step,
                         }, step=global_step)
                         unwrapped.transformer.train()
+                        torch.cuda.empty_cache()
 
                     if (
                         eval_every_steps
@@ -192,6 +193,7 @@ class DiTTrainer:
                         metrics = self.eval_engine.compute(unwrapped, global_step)
                         if metrics and self.accelerator.is_main_process:
                             self.accelerator.log(metrics, step=global_step)
+                        torch.cuda.empty_cache()
 
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0

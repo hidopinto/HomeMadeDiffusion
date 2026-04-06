@@ -51,14 +51,14 @@ training:
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 96             # reduced from 256 for streaming mode (VAE+CLIP stay on GPU, ~1.5 GB overhead)
+  batch_size: 128            # increased from 96; training-batch tensor is tiny (~37 MB), fewer steps/epoch
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   save_every_steps: 5000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
   eval_every_steps: 5000   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
-  eval_batch_size: 8       # Generation batch size during eval
+  eval_batch_size: 16      # Generation batch size during eval; no gradients → safe on 3090
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 1000  # Run inference every N optimizer steps; False = disabled
@@ -87,7 +87,7 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 32     # micro-batch size for on-the-fly GPU encoding; kept small to avoid VAE OOM
+  encoding_batch_size: 32     # VAE UNet first down-block at batch=64 allocates 4 GiB intermediate; 32 → 2 GiB, safe on 3090
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
