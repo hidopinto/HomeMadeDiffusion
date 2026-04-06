@@ -75,7 +75,14 @@ def main() -> None:
 
     # 1. Build model (frozen giants + DiT + diffusion engine)
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
-    model.vae.enable_slicing()
+    mode = getattr(config.data, "mode", "cache")
+    if mode == "cache_then_train":
+        # Disable slicing during the caching pass: slicing serializes the batch into single-image
+        # calls, keeping GPU utilization near 0%. With 24 GB VRAM and no DiT forward pass active
+        # during caching, the full batch fits comfortably.
+        model.vae.disable_slicing()
+    else:
+        model.vae.enable_slicing()
 
     # Compile frozen encoders for faster VAE caching pass and per-step CLIP encoding
     if torch.cuda.is_available():
@@ -111,11 +118,11 @@ def main() -> None:
 
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
-    mode = getattr(config.data, "mode", "cache")
     if mode == "streaming":
         pass  # VAE and text_encoder must stay on GPU — they encode every training batch
     elif mode == "cache_then_train":
-        model.vae = model.vae.cpu()  # VAE no longer needed; text_encoder stays on GPU for VaeCachedDataset
+        # Caching done: move VAE off GPU. text_encoder stays on GPU for VaeCachedDataset.
+        model.vae = model.vae.cpu()
     else:
         model.vae = model.vae.cpu()
         model.text_encoder = model.text_encoder.cpu()
