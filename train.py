@@ -67,6 +67,7 @@ def main() -> None:
 
     # 1. Build model (frozen giants + DiT + diffusion engine)
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
+    model.vae.enable_slicing()
 
     # 2. Optimizer
     optimizer = AdamW(
