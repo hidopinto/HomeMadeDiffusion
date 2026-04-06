@@ -79,6 +79,7 @@ def main() -> None:
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
 
     # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here)
+    torch.cuda.empty_cache()
     eval_engine = None
     if getattr(config.training, "eval_every_steps", False):
         val_split = getattr(config.data, "val_split", None)

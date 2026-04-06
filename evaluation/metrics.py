@@ -53,21 +53,44 @@ class EvaluationEngine:
         self._populate_real_stats(val_dataloader, model)
 
     def _populate_real_stats(self, val_dataloader: DataLoader, model) -> None:
-        """Decode val latents and update FID real-image statistics."""
+        """Decode val latents and update FID real-image statistics.
+
+        ``self.isc`` and ``self.clip_score`` are unused during this method.
+        They are moved to CPU for the duration of the loop to free ~1.5 GB of
+        GPU VRAM, then restored to the training device before returning.
+        """
         scale_factor: float = self.config.dit.vae_scale_factor
-        max_real = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
-        count = 0
+        max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
+        count: int = 0
+
+        # Offload metrics that are unused during real-stat population.
+        self.isc = self.isc.cpu()
+        self.clip_score = self.clip_score.cpu()
+        torch.cuda.empty_cache()
 
         model.vae.eval()
         with torch.no_grad():
             for batch in val_dataloader:
                 if count >= max_real:
                     break
-                latents = batch["latent"].to(self.device)
-                imgs = _decode_latents_to_unit(model.vae, latents, scale_factor)
+                latents: Tensor = batch["latent"].to(self.device)
+
+                # Decode in sub-batches to cap peak VAE decoder memory.
+                sub_imgs: list[Tensor] = []
+                for sub_latents in _iter_batches_tensor(latents, self.eval_batch_size):
+                    sub_imgs.append(
+                        _decode_latents_to_unit(model.vae, sub_latents, scale_factor)
+                    )
+                    torch.cuda.empty_cache()
+                imgs: Tensor = torch.cat(sub_imgs, dim=0)
+
                 self.fid.update(imgs.to(self.device), real=True)
                 count += imgs.shape[0]
                 torch.cuda.empty_cache()
+
+        # Restore metrics to GPU for compute() calls.
+        self.isc = self.isc.to(self.device)
+        self.clip_score = self.clip_score.to(self.device)
 
         # Snapshot real stats so we can restore them after each reset()
         self._real_sum = self.fid.real_features_sum.clone()
@@ -177,3 +200,9 @@ def _iter_batches(items: list, batch_size: int):
     """Yield successive batches from a flat list."""
     for i in range(0, len(items), batch_size):
         yield items[i : i + batch_size]
+
+
+def _iter_batches_tensor(t: Tensor, batch_size: int):
+    """Yield successive sub-batches of a Tensor along dim 0."""
+    for i in range(0, t.shape[0], batch_size):
+        yield t[i : i + batch_size]
