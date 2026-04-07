@@ -115,11 +115,10 @@ class VaeCachingEngine:
         captions_path = cache_dir / "captions.jsonl"
 
         existing_count = len(list(latent_dir.glob("*.pt")))
+        hf_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
         if existing_count > 0:
             print(f"[VaeCachingEngine] Resuming from sample {existing_count} ...")
             hf_dataset = hf_dataset.skip(existing_count)
-
-        hf_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
         executor = ThreadPoolExecutor(max_workers=16)
         global_idx = existing_count
         images: list = []
