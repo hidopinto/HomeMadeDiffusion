@@ -6,6 +6,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import datasets as hf_datasets
+
 __all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset"]
 
 import numpy as np
@@ -74,28 +76,37 @@ class VaeCachingEngine:
         tmp.rename(latent_dir / f"{idx:06d}.pt")
 
     @torch.no_grad()
-    def _encode_batch(self, images: list) -> Tensor:
+    def _encode_batch(self, images: list, captions: list[str]) -> tuple[Tensor | None, list[str]]:
         pixel_arrays = []
-        for img in images:
-            if isinstance(img, bytes):
-                img = Image.open(io.BytesIO(img))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            w, h = img.size
-            min_dim = min(w, h)
-            left = (w - min_dim) // 2
-            top = (h - min_dim) // 2
-            img = img.crop((left, top, left + min_dim, top + min_dim))
-            img = img.resize((self.image_size, self.image_size), Image.LANCZOS)
-            arr = np.array(img, dtype=np.float32) / 255.0
-            arr = (arr - 0.5) / 0.5
-            pixel_arrays.append(arr)
+        valid_captions = []
+        for img, caption in zip(images, captions):
+            try:
+                if isinstance(img, dict):
+                    img = img.get("bytes") or open(img["path"], "rb").read()
+                if isinstance(img, bytes):
+                    img = Image.open(io.BytesIO(img))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                w, h = img.size
+                min_dim = min(w, h)
+                left = (w - min_dim) // 2
+                top = (h - min_dim) // 2
+                img = img.crop((left, top, left + min_dim, top + min_dim))
+                img = img.resize((self.image_size, self.image_size), Image.LANCZOS)
+                arr = np.array(img, dtype=np.float32) / 255.0
+                arr = (arr - 0.5) / 0.5
+                pixel_arrays.append(arr)
+                valid_captions.append(caption)
+            except Exception as e:
+                print(f"[VaeCachingEngine] Skipping corrupt image: {e}")
+        if not pixel_arrays:
+            return None, []
         pixel_tensor = torch.from_numpy(np.stack(pixel_arrays))
         pixel_tensor = rearrange(pixel_tensor, "b h w c -> b c h w")
         pixel_tensor = pixel_tensor.to(self.device).to(self.vae.dtype)
         latents = self.vae.encode(pixel_tensor).latent_dist.sample()
         latents = latents * self.vae_scale_factor
-        return latents.float()
+        return latents.float(), valid_captions
 
     def run(self, hf_dataset, cache_root: Path, split: str) -> Path:
         cache_dir = cache_root / self.dataset_name.replace("/", "--") / split
@@ -108,6 +119,7 @@ class VaeCachingEngine:
             print(f"[VaeCachingEngine] Resuming from sample {existing_count} ...")
             hf_dataset = hf_dataset.skip(existing_count)
 
+        hf_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
         executor = ThreadPoolExecutor(max_workers=16)
         global_idx = existing_count
         images: list = []
@@ -119,17 +131,18 @@ class VaeCachingEngine:
                 captions.append(raw[self.caption_key])
 
                 if len(images) == self.encoding_batch_size:
-                    latents = self._encode_batch(images)
-                    batch_futures: list[Future] = [
-                        executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                        for j in range(len(images))
-                    ]
-                    for f in batch_futures:
-                        f.result()
-                    for caption in captions:
-                        caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                    caption_file.flush()
-                    global_idx += len(images)
+                    latents, valid_captions = self._encode_batch(images, captions)
+                    if latents is not None:
+                        batch_futures: list[Future] = [
+                            executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
+                            for j in range(len(valid_captions))
+                        ]
+                        for f in batch_futures:
+                            f.result()
+                        for caption in valid_captions:
+                            caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
+                        caption_file.flush()
+                        global_idx += len(valid_captions)
                     images = []
                     captions = []
 
@@ -137,16 +150,17 @@ class VaeCachingEngine:
                         print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
 
             if images:
-                latents = self._encode_batch(images)
-                batch_futures = [
-                    executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                    for j in range(len(images))
-                ]
-                for f in batch_futures:
-                    f.result()
-                for caption in captions:
-                    caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                global_idx += len(images)
+                latents, valid_captions = self._encode_batch(images, captions)
+                if latents is not None:
+                    batch_futures = [
+                        executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
+                        for j in range(len(valid_captions))
+                    ]
+                    for f in batch_futures:
+                        f.result()
+                    for caption in valid_captions:
+                        caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
+                    global_idx += len(valid_captions)
 
         executor.shutdown(wait=False)
 
