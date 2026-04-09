@@ -77,12 +77,8 @@ def _build_shard_resume_dataset(
         )
         return dataset, within_skip
     except Exception as e:
-        print(
-            f"[VaeCachingEngine] Shard-aware resume failed ({e}); "
-            f"falling back to .skip({existing_count})"
-        )
-        fallback = hf_datasets.load_dataset(dataset_name, split=split, streaming=True, cache_dir=hf_cache)
-        return fallback, existing_count
+        print(f"[VaeCachingEngine] Shard-aware resume failed, will retry: {e}")
+        raise
 
 
 @dataclass
@@ -268,11 +264,8 @@ class VaeCachingEngine:
 
             except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
                 attempt += 1
-                if attempt >= self.max_retries:
-                    print(f"[VaeCachingEngine] Network error after {attempt} attempts, giving up: {e}")
-                    raise
-                wait = 2 ** attempt
-                print(f"[VaeCachingEngine] Network error (attempt {attempt}/{self.max_retries}): {e}. Retrying in {wait}s ...")
+                wait = min(2 ** attempt * 30, 300)
+                print(f"[VaeCachingEngine] Network error (attempt {attempt}): {e}. Retrying in {wait}s ...")
                 time.sleep(wait)
 
         executor.shutdown(wait=False)
