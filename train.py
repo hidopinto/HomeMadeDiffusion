@@ -96,6 +96,11 @@ def main() -> None:
         torch.cuda.empty_cache()
         model.vae.disable_slicing()
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
+    if hasattr(dataloader.dataset, "__len__") and len(dataloader.dataset) == 0:
+        raise RuntimeError(
+            "Dataset is empty after caching — 0 valid samples were produced. "
+            "Check that image_key, caption_key, and dataset_name are correct."
+        )
     if mode == "cache_then_train":
         model.vae.enable_slicing()
         model.transformer.to(device)
