@@ -252,7 +252,7 @@ def _build_cache_then_train_dataloader(
         if take_n is not None:
             raw_dataset = raw_dataset.take(take_n)
         engine = VaeCachingEngine(vae=vae, config=config, device=device)
-        engine.run(raw_dataset, vae_cache_root, split=split)
+        engine.run(raw_dataset, vae_cache_root, split=split, hf_cache=str(hf_cache))
         print("[loader] Caching complete. Starting training from cache ...")
     else:
         print(f"[loader] VAE cache valid ({VaeCacheManifest.load(manifest_path).num_samples:,} samples). Loading from disk ...")

@@ -6,8 +6,10 @@ from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import datasets as hf_datasets
+from huggingface_hub import list_repo_files
 
 __all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset"]
 
@@ -19,6 +21,68 @@ from torch import Tensor
 from torch.utils.data import IterableDataset
 
 from data.protocols import LatentEncoderProtocol, TextEncoderProtocol
+
+
+def _load_shard_state(cache_dir: Path) -> dict | None:
+    path = cache_dir / "shard_state.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _save_shard_state(cache_dir: Path, state: dict) -> None:
+    tmp = cache_dir / "shard_state.json.tmp"
+    tmp.write_text(json.dumps(state))
+    tmp.rename(cache_dir / "shard_state.json")
+
+
+def _build_shard_resume_dataset(
+    dataset_name: str,
+    split: str,
+    existing_count: int,
+    shard_state: dict,
+    hf_cache: str,
+) -> tuple[Any, int]:
+    """
+    Returns (streaming_dataset_starting_from_target_shard, within_shard_skip_count).
+    Falls back to (full_streaming_dataset, existing_count) on any lookup failure.
+    """
+    within_skip = existing_count - shard_state["start"]
+    target_filename = shard_state["url"].rstrip("/").split("/")[-1]
+
+    try:
+        all_files = sorted([
+            f for f in list_repo_files(dataset_name, repo_type="dataset")
+            if f.endswith(".tar") and split in f
+        ])
+        start_pos = next(
+            (i for i, f in enumerate(all_files) if f.endswith(target_filename)),
+            None,
+        )
+        if start_pos is None:
+            raise ValueError(f"Shard '{target_filename}' not found in repo file listing")
+        remaining = [f"hf://datasets/{dataset_name}/{f}" for f in all_files[start_pos:]]
+        dataset = hf_datasets.load_dataset(
+            dataset_name,
+            data_files={"train": remaining},
+            streaming=True,
+            cache_dir=hf_cache,
+        )["train"]
+        print(
+            f"[VaeCachingEngine] Shard-aware resume: '{target_filename}' "
+            f"({start_pos + 1}/{len(all_files)} shards), within-shard skip: {within_skip}"
+        )
+        return dataset, within_skip
+    except Exception as e:
+        print(
+            f"[VaeCachingEngine] Shard-aware resume failed ({e}); "
+            f"falling back to .skip({existing_count})"
+        )
+        fallback = hf_datasets.load_dataset(dataset_name, split=split, streaming=True, cache_dir=hf_cache)
+        return fallback, existing_count
 
 
 @dataclass
@@ -53,10 +117,13 @@ class VaeCachingEngine:
       {cache_dir}/latents/{index:06d}.pt  — one latent tensor per sample
       {cache_dir}/captions.jsonl          — one JSON-encoded caption string per line
       {cache_dir}/manifest.json           — VaeCacheManifest
+      {cache_dir}/shard_state.json        — current shard URL + its global start index
 
-    Resumable: counts existing latent files and skips that many samples in the HF streaming
-    dataset at startup. Latent saves are atomic (tmp → rename). Captions are written after
-    each micro-batch's saves are confirmed, so latent count and caption line count stay in sync.
+    Resumable: on restart, shard_state.json is used to reload the HF streaming dataset
+    starting from the right tar shard, then skip only the within-shard offset. This avoids
+    re-downloading all preceding shards. Falls back to .skip(N) if shard_state.json is absent.
+    Latent saves are atomic (tmp → rename). Captions are written after each batch's saves are
+    confirmed, so latent count and caption line count stay in sync.
     """
 
     def __init__(self, vae: LatentEncoderProtocol, config, device: str) -> None:
@@ -110,7 +177,33 @@ class VaeCachingEngine:
         latents = latents * self.vae_scale_factor
         return latents.float(), valid_captions
 
-    def run(self, hf_dataset, cache_root: Path, split: str) -> Path:
+    def _flush_batch(
+        self,
+        images: list,
+        captions: list[str],
+        global_idx: int,
+        latent_dir: Path,
+        caption_file,
+        executor: ThreadPoolExecutor,
+    ) -> tuple[list, list[str], int]:
+        """Encode and save a batch to disk. Returns ([], [], updated_global_idx)."""
+        if not images:
+            return images, captions, global_idx
+        latents, valid_captions = self._encode_batch(images, captions)
+        if latents is not None:
+            futures: list[Future] = [
+                executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
+                for j in range(len(valid_captions))
+            ]
+            for f in futures:
+                f.result()
+            for j, cap in enumerate(valid_captions):
+                caption_file.write(json.dumps({"id": global_idx + j, "caption": cap}, ensure_ascii=False) + "\n")
+            caption_file.flush()
+            global_idx += len(valid_captions)
+        return [], [], global_idx
+
+    def run(self, hf_dataset, cache_root: Path, split: str, hf_cache: str | None = None) -> Path:
         cache_dir = cache_root / self.dataset_name.replace("/", "--") / split
         latent_dir = cache_dir / "latents"
         latent_dir.mkdir(parents=True, exist_ok=True)
@@ -124,9 +217,21 @@ class VaeCachingEngine:
         while True:
             # Recount from disk — this is the authoritative resume offset
             existing_count = len(list(latent_dir.glob("*.pt")))
-            dataset_iter = base_dataset.skip(existing_count) if existing_count > 0 else base_dataset
-            if existing_count > 0:
+            shard_state = _load_shard_state(cache_dir)
+            _last_recorded_url: str | None = shard_state["url"] if shard_state else None
+
+            if existing_count > 0 and shard_state and hf_cache is not None:
+                resume_ds, within_skip = _build_shard_resume_dataset(
+                    self.dataset_name, split, existing_count, shard_state, hf_cache
+                )
+                dataset_iter = resume_ds.cast_column(self.image_key, hf_datasets.Image(decode=False))
+                if within_skip > 0:
+                    dataset_iter = dataset_iter.skip(within_skip)
+            elif existing_count > 0:
+                dataset_iter = base_dataset.skip(existing_count)
                 print(f"[VaeCachingEngine] Resuming from sample {existing_count} (attempt {attempt + 1}) ...")
+            else:
+                dataset_iter = base_dataset
 
             global_idx = existing_count
             images: list = []
@@ -135,40 +240,30 @@ class VaeCachingEngine:
             try:
                 with captions_path.open("a", encoding="utf-8") as caption_file:
                     for raw in dataset_iter:
+                        url = raw.get("__url__", "")
+                        if url and url != _last_recorded_url:
+                            # Flush buffered samples from the previous shard before recording
+                            # the new shard boundary so that shard_state["start"] is accurate.
+                            images, captions, global_idx = self._flush_batch(
+                                images, captions, global_idx, latent_dir, caption_file, executor
+                            )
+                            _save_shard_state(cache_dir, {"url": url, "start": global_idx})
+                            _last_recorded_url = url
+
                         images.append(raw[self.image_key])
                         captions.append(raw[self.caption_key])
 
                         if len(images) == self.encoding_batch_size:
-                            latents, valid_captions = self._encode_batch(images, captions)
-                            if latents is not None:
-                                batch_futures: list[Future] = [
-                                    executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                                    for j in range(len(valid_captions))
-                                ]
-                                for f in batch_futures:
-                                    f.result()
-                                for caption in valid_captions:
-                                    caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                                caption_file.flush()
-                                global_idx += len(valid_captions)
-                            images = []
-                            captions = []
-
+                            images, captions, global_idx = self._flush_batch(
+                                images, captions, global_idx, latent_dir, caption_file, executor
+                            )
                             if global_idx % 10_000 == 0:
                                 print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
 
                     if images:
-                        latents, valid_captions = self._encode_batch(images, captions)
-                        if latents is not None:
-                            batch_futures = [
-                                executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                                for j in range(len(valid_captions))
-                            ]
-                            for f in batch_futures:
-                                f.result()
-                            for caption in valid_captions:
-                                caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                            global_idx += len(valid_captions)
+                        _, _, global_idx = self._flush_batch(
+                            images, captions, global_idx, latent_dir, caption_file, executor
+                        )
                 break  # success
 
             except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
@@ -227,7 +322,11 @@ class VaeCachedDataset(IterableDataset):
 
         captions_path = self.cache_dir / "captions.jsonl"
         with captions_path.open("r", encoding="utf-8") as f:
-            self.captions: list[str] = [json.loads(line) for line in f if line.strip()]
+            self.captions: dict[int, str] = {
+                obj["id"]: obj["caption"]
+                for line in f if line.strip()
+                for obj in (json.loads(line),)
+            }
         self.num_samples = len(self.captions)
 
     def __len__(self) -> int:
@@ -270,7 +369,7 @@ class VaeCachedDataset(IterableDataset):
             yield sample
 
     def __iter__(self) -> Iterator[dict[str, Tensor | dict[str, Tensor]]]:
-        indices = list(range(self.num_samples))
+        indices = list(self.captions.keys())
         random.shuffle(indices)
         batch_indices: list[int] = []
         batch_captions: list[str] = []
