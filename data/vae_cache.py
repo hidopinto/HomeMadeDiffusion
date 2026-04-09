@@ -1,6 +1,7 @@
 import io
 import json
 import random
+import time
 from collections.abc import Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -68,6 +69,7 @@ class VaeCachingEngine:
         self.caption_key = config.data.caption_key
         self.device = device
         self.vae_model_id = config.external_models.vae
+        self.max_retries = config.data.dataset_max_retries
 
     @staticmethod
     def _save_latent(idx: int, latent: Tensor, latent_dir: Path) -> None:
@@ -114,52 +116,69 @@ class VaeCachingEngine:
         latent_dir.mkdir(parents=True, exist_ok=True)
         captions_path = cache_dir / "captions.jsonl"
 
-        existing_count = len(list(latent_dir.glob("*.pt")))
-        hf_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
-        if existing_count > 0:
-            print(f"[VaeCachingEngine] Resuming from sample {existing_count} ...")
-            hf_dataset = hf_dataset.skip(existing_count)
+        # Cast once; keep base_dataset so we can recreate the iterator on retry
+        base_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
         executor = ThreadPoolExecutor(max_workers=16)
-        global_idx = existing_count
-        images: list = []
-        captions: list[str] = []
 
-        with captions_path.open("a", encoding="utf-8") as caption_file:
-            for raw in hf_dataset:
-                images.append(raw[self.image_key])
-                captions.append(raw[self.caption_key])
+        attempt = 0
+        while True:
+            # Recount from disk — this is the authoritative resume offset
+            existing_count = len(list(latent_dir.glob("*.pt")))
+            dataset_iter = base_dataset.skip(existing_count) if existing_count > 0 else base_dataset
+            if existing_count > 0:
+                print(f"[VaeCachingEngine] Resuming from sample {existing_count} (attempt {attempt + 1}) ...")
 
-                if len(images) == self.encoding_batch_size:
-                    latents, valid_captions = self._encode_batch(images, captions)
-                    if latents is not None:
-                        batch_futures: list[Future] = [
-                            executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                            for j in range(len(valid_captions))
-                        ]
-                        for f in batch_futures:
-                            f.result()
-                        for caption in valid_captions:
-                            caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                        caption_file.flush()
-                        global_idx += len(valid_captions)
-                    images = []
-                    captions = []
+            global_idx = existing_count
+            images: list = []
+            captions: list[str] = []
 
-                    if global_idx % 10_000 == 0:
-                        print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
+            try:
+                with captions_path.open("a", encoding="utf-8") as caption_file:
+                    for raw in dataset_iter:
+                        images.append(raw[self.image_key])
+                        captions.append(raw[self.caption_key])
 
-            if images:
-                latents, valid_captions = self._encode_batch(images, captions)
-                if latents is not None:
-                    batch_futures = [
-                        executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                        for j in range(len(valid_captions))
-                    ]
-                    for f in batch_futures:
-                        f.result()
-                    for caption in valid_captions:
-                        caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
-                    global_idx += len(valid_captions)
+                        if len(images) == self.encoding_batch_size:
+                            latents, valid_captions = self._encode_batch(images, captions)
+                            if latents is not None:
+                                batch_futures: list[Future] = [
+                                    executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
+                                    for j in range(len(valid_captions))
+                                ]
+                                for f in batch_futures:
+                                    f.result()
+                                for caption in valid_captions:
+                                    caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
+                                caption_file.flush()
+                                global_idx += len(valid_captions)
+                            images = []
+                            captions = []
+
+                            if global_idx % 10_000 == 0:
+                                print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
+
+                    if images:
+                        latents, valid_captions = self._encode_batch(images, captions)
+                        if latents is not None:
+                            batch_futures = [
+                                executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
+                                for j in range(len(valid_captions))
+                            ]
+                            for f in batch_futures:
+                                f.result()
+                            for caption in valid_captions:
+                                caption_file.write(json.dumps(caption, ensure_ascii=False) + "\n")
+                            global_idx += len(valid_captions)
+                break  # success
+
+            except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
+                attempt += 1
+                if attempt >= self.max_retries:
+                    print(f"[VaeCachingEngine] Network error after {attempt} attempts, giving up: {e}")
+                    raise
+                wait = 2 ** attempt
+                print(f"[VaeCachingEngine] Network error (attempt {attempt}/{self.max_retries}): {e}. Retrying in {wait}s ...")
+                time.sleep(wait)
 
         executor.shutdown(wait=False)
 
