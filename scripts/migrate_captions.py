@@ -1,7 +1,7 @@
 """Migrate captions.jsonl from plain strings to {"id": N, "caption": "..."} format.
 
 Usage:
-    python data/migrate_captions.py /path/to/captions.jsonl
+    python scripts/migrate_captions.py /path/to/captions.jsonl
 
 Safe to run on already-migrated files (passes through new-format lines unchanged).
 Uses atomic rename so the file is never in a partial state.
