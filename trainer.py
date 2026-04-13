@@ -89,13 +89,10 @@ class DiTTrainer:
                             [f"block_{i:02d}", grad_log.get(f"grad_norm/block_{i:02d}", 0.0)]
                             for i in range(len(transformer.blocks))
                         ]
-                        wandb.log(
-                            {"grad_norm/block_depth": wandb.plot.bar(
-                                wandb.Table(columns=["block", "grad_norm"], data=block_data),
-                                "block", "grad_norm",
-                                title="Gradient Norm by Block Depth",
-                            )},
-                            step=global_step,
+                        grad_log["grad_norm/block_depth"] = wandb.plot.bar(
+                            wandb.Table(columns=["block", "grad_norm"], data=block_data),
+                            "block", "grad_norm",
+                            title="Gradient Norm by Block Depth",
                         )
 
             self.optimizer.step()

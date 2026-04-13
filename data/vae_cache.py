@@ -1,5 +1,7 @@
+import errno
 import io
 import json
+import os
 import random
 import time
 from collections.abc import Iterator
@@ -37,6 +39,33 @@ def _save_shard_state(cache_dir: Path, state: dict) -> None:
     tmp = cache_dir / "shard_state.json.tmp"
     tmp.write_text(json.dumps(state))
     tmp.rename(cache_dir / "shard_state.json")
+
+
+def _sync_captions_to_latents(captions_path: Path, existing_count: int) -> None:
+    """Remove orphaned (id >= existing_count) and duplicate entries from captions.jsonl.
+
+    Handles two crash-recovery cases:
+    - Orphaned captions: written after the crash point where latents were not saved.
+    - Accumulated duplicates: same ID appended across multiple crash/resume cycles.
+    First occurrence of each ID wins; rewrite is skipped if the file is already clean.
+    """
+    if not captions_path.exists():
+        return
+    lines = captions_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    seen: set[int] = set()
+    kept: list[str] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if obj["id"] not in seen and obj["id"] < existing_count:
+            seen.add(obj["id"])
+            kept.append(line)
+    if len(kept) == len(lines):
+        return  # already clean, skip rewrite
+    tmp = captions_path.with_suffix(".tmp")
+    tmp.write_text("".join(kept), encoding="utf-8")
+    tmp.rename(captions_path)
 
 
 def _build_shard_resume_dataset(
@@ -196,6 +225,7 @@ class VaeCachingEngine:
             for j, cap in enumerate(valid_captions):
                 caption_file.write(json.dumps({"id": global_idx + j, "caption": cap}, ensure_ascii=False) + "\n")
             caption_file.flush()
+            os.fsync(caption_file.fileno())
             global_idx += len(valid_captions)
         return [], [], global_idx
 
@@ -207,14 +237,24 @@ class VaeCachingEngine:
 
         # Cast once; keep base_dataset so we can recreate the iterator on retry
         base_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
-        executor = ThreadPoolExecutor(max_workers=16)
+
+        _NON_RETRYABLE_ERRNOS = {errno.EIO, errno.ENOSPC, errno.EROFS, errno.EACCES}
 
         attempt = 0
         while True:
-            # Recount from disk — this is the authoritative resume offset
-            existing_count = len(list(latent_dir.glob("*.pt")))
+            # Clean up any orphaned tmp files from a previous crashed save before recounting.
+            for f in latent_dir.glob("tmp_*.pt"):
+                f.unlink(missing_ok=True)
+
+            # Recount from disk — this is the authoritative resume offset.
+            # Use [0-9]* to exclude tmp_*.pt files that may survive a crash between
+            # torch.save() and the rename() call.
+            existing_count = len(list(latent_dir.glob("[0-9]*.pt")))
             shard_state = _load_shard_state(cache_dir)
             _last_recorded_url: str | None = shard_state["url"] if shard_state else None
+
+            # Sync captions to the authoritative latent count before appending more.
+            _sync_captions_to_latents(captions_path, existing_count)
 
             if existing_count > 0 and shard_state and hf_cache is not None:
                 resume_ds, within_skip = _build_shard_resume_dataset(
@@ -233,6 +273,9 @@ class VaeCachingEngine:
             images: list = []
             captions: list[str] = []
 
+            # Create a fresh executor each attempt so stale futures from a previous
+            # failed attempt cannot interfere with the new iteration.
+            executor = ThreadPoolExecutor(max_workers=16)
             try:
                 with captions_path.open("a", encoding="utf-8") as caption_file:
                     for raw in dataset_iter:
@@ -260,15 +303,17 @@ class VaeCachingEngine:
                         _, _, global_idx = self._flush_batch(
                             images, captions, global_idx, latent_dir, caption_file, executor
                         )
+                executor.shutdown(wait=True)
                 break  # success
 
             except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
+                executor.shutdown(wait=False)
+                if isinstance(e, OSError) and e.errno in _NON_RETRYABLE_ERRNOS:
+                    raise
                 attempt += 1
                 wait = min(2 ** attempt * 30, 300)
-                print(f"[VaeCachingEngine] Network error (attempt {attempt}): {e}. Retrying in {wait}s ...")
+                print(f"[VaeCachingEngine] Streaming error (attempt {attempt}): {e}. Retrying in {wait}s ...")
                 time.sleep(wait)
-
-        executor.shutdown(wait=False)
 
         manifest = VaeCacheManifest(
             dataset_name=self.dataset_name,

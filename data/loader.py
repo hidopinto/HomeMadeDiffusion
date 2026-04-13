@@ -116,13 +116,14 @@ def _build_cached_dataloader(
         engine.run(raw_dataset, cache_root, split=split)
 
     dataset = LatentDataset(cache_root, dataset_name, split)
+    num_workers = config.data.num_workers
     return DataLoader(
         dataset,
         batch_size=config.training.batch_size,
         shuffle=shuffle,
-        num_workers=config.data.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
+        num_workers=num_workers,
+        pin_memory=num_workers > 0,
+        persistent_workers=num_workers > 0,
     )
 
 

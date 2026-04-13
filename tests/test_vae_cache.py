@@ -25,7 +25,7 @@ def _make_fake_cache(tmp_path: Path, num_samples: int) -> Path:
         torch.save(torch.randn(4, 8, 8), latent_dir / f"{i:06d}.pt")
     with (cache_dir / "captions.jsonl").open("w") as f:
         for i in range(num_samples):
-            f.write(json.dumps(f"caption {i}") + "\n")
+            f.write(json.dumps({"id": i, "caption": f"caption {i}"}) + "\n")
     return cache_dir
 
 
