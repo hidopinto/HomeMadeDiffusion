@@ -58,6 +58,12 @@ class EvaluationEngine:
         ``self.isc`` and ``self.clip_score`` are unused during this method.
         They are moved to CPU for the duration of the loop to free ~1.5 GB of
         GPU VRAM, then restored to the training device before returning.
+
+        When the underlying dataset exposes ``iter_latents(batch_size)``,
+        that path is used instead of iterating the full DataLoader — this
+        avoids triggering text encoding (CLIP) which is unnecessary here and
+        can cause very long hangs on the first call to a ``torch.compile``d
+        encoder.
         """
         scale_factor: float = self.config.dit.vae_scale_factor
         max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
@@ -68,12 +74,18 @@ class EvaluationEngine:
         self.clip_score = self.clip_score.cpu()
         torch.cuda.empty_cache()
 
+        dataset = val_dataloader.dataset
+        if hasattr(dataset, "iter_latents"):
+            latent_source = dataset.iter_latents(self.eval_batch_size)
+        else:
+            latent_source = (batch["latent"] for batch in val_dataloader)
+
         model.vae.eval()
         with torch.no_grad():
-            for batch in val_dataloader:
+            for latents in latent_source:
                 if count >= max_real:
                     break
-                latents: Tensor = batch["latent"].to(self.device)
+                latents = latents.to(self.device)
 
                 # Decode in sub-batches to cap peak VAE decoder memory.
                 sub_imgs: list[Tensor] = []

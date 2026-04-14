@@ -370,6 +370,24 @@ class VaeCachedDataset(IterableDataset):
     def __len__(self) -> int:
         return self.num_samples
 
+    def iter_latents(self, batch_size: int) -> Iterator[Tensor]:
+        """Yield batches of latents from disk without any text encoding.
+
+        Intended for use-cases that only need latent tensors (e.g. pre-populating
+        FID real-image statistics). Order is not shuffled.
+        """
+        indices = list(self.captions.keys())
+        for start in range(0, len(indices), batch_size):
+            batch_ids = indices[start : start + batch_size]
+            yield torch.stack([
+                torch.load(
+                    self.latent_dir / f"{i:06d}.pt",
+                    map_location="cpu",
+                    weights_only=True,
+                )
+                for i in batch_ids
+            ])
+
     def _yield_encoded_micro_batch(
         self, indices: list[int], captions: list[str]
     ) -> Iterator[dict[str, Tensor | dict[str, Tensor]]]:

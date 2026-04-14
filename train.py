@@ -111,13 +111,9 @@ def main() -> None:
         print("--cache-only: caching complete. Exiting.")
         return
 
-    # Compile text encoder after the caching pass: CUDA graphs no longer occupy VRAM during
-    # encoding, and the compiled model is still available for training inference calls.
-    # VAE is intentionally not compiled (see original comment above).
-    if torch.cuda.is_available():
-        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
-
-    # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here)
+    # 3b. Build val dataloader + evaluation engine (VAE must still be on GPU here).
+    # This must happen BEFORE torch.compile so that _populate_real_stats does not
+    # trigger CUDA-graph capture (reduce-overhead) on the text encoder's first call.
     torch.cuda.empty_cache()
     eval_engine = None
     if getattr(config.training, "eval_every_steps", False):
@@ -129,6 +125,12 @@ def main() -> None:
                 shuffle=False,
             )
             eval_engine = EvaluationEngine(config, val_dataloader, model, device)
+
+    # Compile text encoder after real-stats population: CUDA graphs no longer occupy
+    # VRAM during encoding, and the compiled model is available for cache_null_embed.
+    # VAE is intentionally not compiled (slicing + dynamic shapes make it incompatible).
+    if torch.cuda.is_available():
+        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
 
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
