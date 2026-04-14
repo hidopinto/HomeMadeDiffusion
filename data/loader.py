@@ -1,8 +1,11 @@
+import logging
 import os
 import time
 from pathlib import Path
 
 __all__ = ["build_dataloader"]
+
+logger = logging.getLogger(__name__)
 
 from datasets import DownloadConfig, load_dataset
 from torch.utils.data import DataLoader
@@ -73,13 +76,13 @@ def _build_cached_dataloader(
             cache_valid = False
 
     if cache_valid:
-        print("Cache valid, loading from disk...")
+        logger.info("Cache valid, loading from disk...")
     else:
         num_proc = config.data.dataset_num_proc
         local_data_dir = getattr(config.data, "local_data_dir", None)
         if local_data_dir:
             resolved = str(Path(local_data_dir).expanduser())
-            print(f"Loading dataset from local Parquet files: {resolved}")
+            logger.info("Loading dataset from local Parquet files: %s", resolved)
             raw_dataset = load_dataset(
                 "parquet",
                 data_dir=resolved,
@@ -103,7 +106,7 @@ def _build_cached_dataloader(
                     if attempt == max_retries:
                         raise
                     wait = 2 ** attempt
-                    print(f"Download attempt {attempt}/{max_retries} failed ({e}). Retrying in {wait}s...")
+                    logger.warning("Download attempt %d/%d failed (%s). Retrying in %ds...", attempt, max_retries, e, wait)
                     time.sleep(wait)
         engine = LatentCachingEngine(
             vae=vae,
@@ -142,9 +145,10 @@ def _build_streaming_dataloader(
     if "[" in split:
         base_split = split[:split.index("[")]
         _take_n = getattr(config.data, "val_streaming_samples", 2048)
-        print(
-            f"[loader] Streaming mode does not support split slice '{split}'. "
-            f"Loading base split '{base_split}' and capping at {_take_n} samples via .take()."
+        logger.info(
+            "[loader] Streaming mode does not support split slice '%s'. "
+            "Loading base split '%s' and capping at %d samples via .take().",
+            split, base_split, _take_n,
         )
         split = base_split
     # streaming=True: no download, no disk I/O — samples arrive on-the-fly from HF Hub shards
@@ -218,9 +222,10 @@ def _build_cache_then_train_dataloader(
     if "[" in split:
         base_split = split[:split.index("[")]
         take_n = getattr(config.data, "val_streaming_samples", 2048)
-        print(
-            f"[loader] cache_then_train: split slice '{split}' not supported in streaming. "
-            f"Loading '{base_split}' and capping at {take_n} samples."
+        logger.info(
+            "[loader] cache_then_train: split slice '%s' not supported in streaming. "
+            "Loading '%s' and capping at %d samples.",
+            split, base_split, take_n,
         )
         split = base_split
 
@@ -237,7 +242,7 @@ def _build_cache_then_train_dataloader(
             cache_valid = False
 
     if not cache_valid:
-        print("[loader] VAE cache not found or config mismatch — running caching pass ...")
+        logger.info("[loader] VAE cache not found or config mismatch — running caching pass ...")
         _default_hf_cache = Path.home() / ".cache" / "huggingface" / "datasets"
         hf_cache = Path(
             os.environ.get("HF_DATASETS_CACHE")
@@ -254,9 +259,9 @@ def _build_cache_then_train_dataloader(
             raw_dataset = raw_dataset.take(take_n)
         engine = VaeCachingEngine(vae=vae, config=config, device=device)
         engine.run(raw_dataset, vae_cache_root, split=split, hf_cache=str(hf_cache))
-        print("[loader] Caching complete. Starting training from cache ...")
+        logger.info("[loader] Caching complete. Starting training from cache ...")
     else:
-        print(f"[loader] VAE cache valid ({VaeCacheManifest.load(manifest_path).num_samples:,} samples). Loading from disk ...")
+        logger.info("[loader] VAE cache valid (%d samples). Loading from disk ...", VaeCacheManifest.load(manifest_path).num_samples)
 
     dataset = VaeCachedDataset(
         cache_dir=cache_dir,
@@ -266,9 +271,11 @@ def _build_cache_then_train_dataloader(
         device=device,
     )
     # num_workers=0: CLIP runs on GPU and cannot cross subprocess fork boundaries
-    return DataLoader(
+    dataloader = DataLoader(
         dataset,
         batch_size=config.training.batch_size,
         num_workers=0,
         pin_memory=False,
     )
+    logger.info("[loader] DataLoader ready: %d batches.", len(dataloader))
+    return dataloader

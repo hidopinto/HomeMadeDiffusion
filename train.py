@@ -1,4 +1,5 @@
 import argparse
+import logging
 import math
 from functools import partial
 
@@ -16,6 +17,8 @@ from model_builder import build_model
 from utils import load_config, setup_logging
 from data import build_dataloader
 from evaluation import EvaluationEngine
+
+logger = logging.getLogger(__name__)
 
 
 def _cosine_lr_lambda(
@@ -74,8 +77,10 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 1. Build model (frozen giants + DiT + diffusion engine)
+    logger.info("Building model (VAE + CLIP + DiT)...")
     model = build_model(config, device, gradient_checkpointing=config.training.gradient_checkpointing)
     model.vae.enable_slicing()
+    logger.info("Model ready.")
     mode = getattr(config.data, "mode", "cache")
 
     # 2. Optimizer
@@ -87,6 +92,7 @@ def main() -> None:
     )
 
     # 3. Build dataloader — in cache_then_train mode this runs the caching pass first (blocking)
+    logger.info("Building dataloader (mode=%s)...", mode)
     if mode == "cache_then_train":
         # Offload DiT + condition_manager to CPU before caching: frees ~1.3 GB on GPU so the VAE
         # can encode full batches (disable_slicing) without OOM. Peak VRAM during caching is
@@ -96,6 +102,7 @@ def main() -> None:
         torch.cuda.empty_cache()
         model.vae.disable_slicing()
     dataloader = build_dataloader(config, model.vae, model.tokenizer, model.text_encoder, device)
+    logger.info("Dataloader ready.")
     if hasattr(dataloader.dataset, "__len__") and len(dataloader.dataset) == 0:
         raise RuntimeError(
             "Dataset is empty after caching — 0 valid samples were produced. "
@@ -127,7 +134,9 @@ def main() -> None:
             eval_engine = EvaluationEngine(config, val_dataloader, model, device)
 
     # 3a. Cache null text embedding before offloading frozen models
+    logger.info("Caching null text embedding...")
     model.cache_null_embed(torch.device(device))
+    logger.info("Null embedding cached. Offloading frozen models to CPU...")
     if mode == "streaming":
         pass  # VAE and text_encoder must stay on GPU — they encode every training batch
     elif mode == "cache_then_train":
@@ -137,6 +146,7 @@ def main() -> None:
         model.vae = model.vae.cpu()
         model.text_encoder = model.text_encoder.cpu()
     torch.cuda.empty_cache()
+    logger.info("Frozen models offloaded.")
 
     # 4. Build LR scheduler
     grad_accum_steps: int = getattr(config.training, "gradient_accumulation_steps", 1)
@@ -144,6 +154,10 @@ def main() -> None:
     steps_per_epoch: int = getattr(config.data, "steps_per_epoch", None) or len(dataloader)
     total_training_steps: int = (steps_per_epoch // grad_accum_steps) * config.training.epochs
     num_warmup_steps: int = round(config.training.warmup_ratio * total_training_steps)
+    logger.info(
+        "Building LR scheduler (total_steps=%d, warmup_steps=%d)...",
+        total_training_steps, num_warmup_steps,
+    )
 
     lr_scheduler = build_lr_scheduler(
         scheduler_name=config.training.lr_scheduler,
@@ -155,11 +169,13 @@ def main() -> None:
     )
 
     # 5. Execute
+    logger.info("Initialising trainer (torch.compile + accelerator.prepare)...")
     trainer = DiTTrainer(
         config=config, model=model, dataloader=dataloader,
         optimizer=optimizer, lr_scheduler=lr_scheduler,
         eval_engine=eval_engine,
     )
+    logger.info("Trainer ready. Starting training.")
     trainer.fit(epochs=config.training.epochs)
 
 

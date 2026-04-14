@@ -32,13 +32,22 @@ SAMPLER_REGISTRY: dict[str, type] = {
 
 def load_frozen_models(config: Box, device: str) -> tuple[AutoencoderKL, CLIPTextModel, CLIPTokenizer]:
     logger.info("Loading frozen models (VAE + CLIP text encoder)...")
+    logger.info("  Loading VAE (%s)...", config.external_models.vae)
     vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
+    logger.info("  VAE loaded.")
+    logger.info("  Loading CLIP tokenizer (%s)...", config.external_models.tokenizer)
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
+    logger.info("  CLIP tokenizer loaded.")
+    logger.info("  Loading CLIP text encoder (%s)...", config.external_models.text_encoder)
     _clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
     text_encoder = _clip.text_model
     del _clip.vision_model
-    logger.info("Frozen models loaded.")
-    return vae.to(device), text_encoder.to(device), tokenizer
+    logger.info("  CLIP text encoder loaded.")
+    logger.info("  Moving frozen models to %s...", device)
+    vae_on_device = vae.to(device)
+    text_encoder_on_device = text_encoder.to(device)
+    logger.info("  Frozen models on device.")
+    return vae_on_device, text_encoder_on_device, tokenizer
 
 
 def build_model(config: Box, device: str, gradient_checkpointing: bool = False) -> LatentDiffusion:
@@ -95,8 +104,10 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
     )
-    model = LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer,
-                            engine, condition_manager=condition_manager)
     num_params = sum(p.numel() for p in model_core.parameters())
     logger.info("DiT built: %.2fM trainable parameters.", num_params / 1e6)
+    logger.info("  Moving DiT to %s...", device)
+    model = LatentDiffusion(config, model_core.to(device), vae, text_encoder, tokenizer,
+                            engine, condition_manager=condition_manager)
+    logger.info("  DiT on device.")
     return model

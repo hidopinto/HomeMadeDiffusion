@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import torch
 import wandb
 from accelerate import Accelerator
+
+logger = logging.getLogger(__name__)
 
 
 class DiTTrainer:
@@ -31,12 +34,16 @@ class DiTTrainer:
 
         self.eval_engine = eval_engine
 
+        logger.info("torch.compile starting...")
         if torch.cuda.is_available():
             self.model = torch.compile(self.model, mode="default")
+        logger.info("torch.compile done.")
 
+        logger.info("accelerator.prepare starting...")
         self.model, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
+        logger.info("accelerator.prepare done.")
 
     def train_step(self, batch: dict, global_step: int) -> tuple[torch.Tensor, dict]:
         latents = batch["latent"]
@@ -125,14 +132,19 @@ class DiTTrainer:
                 global_step = int(step_file.read_text().strip())
             self.accelerator.print(f"Resumed training from step {global_step}")
 
+        _first_step_logged = False
         for epoch in range(epochs):
             self.model.train()
             epoch_loss = 0.0
             epoch_steps = 0
             t_start = time.time()
+            logger.info("Epoch %d/%d — starting.", epoch + 1, epochs)
 
             for batch in self.dataloader:
                 loss, grad_log = self.train_step(batch, global_step)
+                if not _first_step_logged:
+                    logger.info("First batch complete — training loop running.")
+                    _first_step_logged = True
                 loss_val = loss.item()
                 epoch_loss += loss_val
                 epoch_steps += 1
