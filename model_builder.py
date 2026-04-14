@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import torch
 from box import Box
 from diffusers import AutoencoderKL
+from huggingface_hub import try_to_load_from_cache
 from timm.models.vision_transformer import Attention
 from transformers import CLIPModel, CLIPTextModel, CLIPTokenizer
 
@@ -17,6 +19,18 @@ from models import (AdaLNTextProjector, CrossAttnTextProjector, CrossAttention,
                     DiT, LatentDiffusion, SinCosPosEmbed2D, SinCosPosEmbed3D)
 
 logger = logging.getLogger(__name__)
+
+
+def _hf_source_label(repo_id: str) -> str:
+    """Return a human-readable label indicating whether the model will be downloaded or loaded from cache."""
+    try:
+        cached = try_to_load_from_cache(repo_id, "config.json")
+        if cached is not None:
+            return "from local cache"
+        return "downloading from HuggingFace (first run — may take several minutes)"
+    except Exception:
+        return "source unknown"
+
 
 METHOD_REGISTRY: dict[str, type] = {
     "ddpm": DDPM,
@@ -32,17 +46,22 @@ SAMPLER_REGISTRY: dict[str, type] = {
 
 def load_frozen_models(config: Box, device: str) -> tuple[AutoencoderKL, CLIPTextModel, CLIPTokenizer]:
     logger.info("Loading frozen models (VAE + CLIP text encoder)...")
-    logger.info("  Loading VAE (%s)...", config.external_models.vae)
+    t0 = time.time()
+    logger.info("  Loading VAE (%s) — %s...", config.external_models.vae, _hf_source_label(config.external_models.vae))
     vae = AutoencoderKL.from_pretrained(config.external_models.vae, torch_dtype=torch.bfloat16)
-    logger.info("  VAE loaded.")
-    logger.info("  Loading CLIP tokenizer (%s)...", config.external_models.tokenizer)
+    logger.info("  VAE loaded (%.1fs).", time.time() - t0)
+
+    t0 = time.time()
+    logger.info("  Loading CLIP tokenizer (%s) — %s...", config.external_models.tokenizer, _hf_source_label(config.external_models.tokenizer))
     tokenizer = CLIPTokenizer.from_pretrained(config.external_models.tokenizer)
-    logger.info("  CLIP tokenizer loaded.")
-    logger.info("  Loading CLIP text encoder (%s)...", config.external_models.text_encoder)
+    logger.info("  CLIP tokenizer loaded (%.1fs).", time.time() - t0)
+
+    t0 = time.time()
+    logger.info("  Loading CLIP text encoder (%s) — %s...", config.external_models.text_encoder, _hf_source_label(config.external_models.text_encoder))
     _clip = CLIPModel.from_pretrained(config.external_models.text_encoder, torch_dtype=torch.bfloat16)
     text_encoder = _clip.text_model
     del _clip.vision_model
-    logger.info("  CLIP text encoder loaded.")
+    logger.info("  CLIP text encoder loaded (%.1fs).", time.time() - t0)
     logger.info("  Moving frozen models to %s...", device)
     vae_on_device = vae.to(device)
     text_encoder_on_device = text_encoder.to(device)

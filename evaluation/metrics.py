@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
@@ -8,6 +10,8 @@ from torchmetrics.image.inception import InceptionScore
 from torchmetrics.multimodal.clip_score import CLIPScore
 
 __all__ = ["EvaluationEngine"]
+
+logger = logging.getLogger(__name__)
 
 _MIN_FID_SAMPLES = 2048
 
@@ -46,11 +50,22 @@ class EvaluationEngine:
         self.width: int = getattr(config.training, "inference_width", 512)
         self.scheduler: str = config.diffusion.sampler
 
+        logger.info("Initialising evaluation metrics (FID + IS + CLIPScore)...")
         self.fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
         self.isc = InceptionScore(normalize=True).to(device)
         self.clip_score = CLIPScore(model_name_or_path="openai/clip-vit-large-patch14").to(device)
+        logger.info("  Metric models on device.")
 
+        logger.info("  Pre-populating FID real statistics...")
         self._populate_real_stats(val_dataloader, model)
+
+        # Offload metric models to CPU — they are only needed during compute().
+        # Leaving them on GPU would pin ~1.1 GB of VRAM for the entire training run.
+        self.fid = self.fid.cpu()
+        self.isc = self.isc.cpu()
+        self.clip_score = self.clip_score.cpu()
+        torch.cuda.empty_cache()
+        logger.info("EvaluationEngine ready (metrics offloaded to CPU until first eval).")
 
     def _populate_real_stats(self, val_dataloader: DataLoader, model) -> None:
         """Decode val latents and update FID real-image statistics.
@@ -68,6 +83,7 @@ class EvaluationEngine:
         scale_factor: float = self.config.dit.vae_scale_factor
         max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
         count: int = 0
+        logger.info("  Decoding up to %d real images for FID reference stats...", max_real)
 
         # Offload metrics that are unused during real-stat population.
         self.isc = self.isc.cpu()
@@ -100,6 +116,8 @@ class EvaluationEngine:
                 count += imgs.shape[0]
                 torch.cuda.empty_cache()
 
+        logger.info("  FID real stats populated (%d images).", count)
+
         # Restore metrics to GPU for compute() calls.
         self.isc = self.isc.to(self.device)
         self.clip_score = self.clip_score.to(self.device)
@@ -126,11 +144,20 @@ class EvaluationEngine:
             Dict of metric names → scalar values, or empty dict if not enough
             samples for reliable FID.
         """
+        logger.info("Running eval (FID / IS / CLIPScore)...")
+        self.fid = self.fid.to(self.device)
+        self.isc = self.isc.to(self.device)
+        self.clip_score = self.clip_score.to(self.device)
+
         if self.eval_num_samples < _MIN_FID_SAMPLES:
-            print(
-                f"[EvaluationEngine] eval_num_samples={self.eval_num_samples} < {_MIN_FID_SAMPLES}; "
-                "skipping FID (results would be unreliable)."
+            logger.warning(
+                "[EvaluationEngine] eval_num_samples=%d < %d; skipping FID (results would be unreliable).",
+                self.eval_num_samples, _MIN_FID_SAMPLES,
             )
+            self.fid = self.fid.cpu()
+            self.isc = self.isc.cpu()
+            self.clip_score = self.clip_score.cpu()
+            torch.cuda.empty_cache()
             return {}
 
         model.transformer.eval()
@@ -191,6 +218,16 @@ class EvaluationEngine:
         self.isc.reset()
         self.clip_score.reset()
 
+        # Offload back to CPU — metric models are not needed until the next eval pass.
+        self.fid = self.fid.cpu()
+        self.isc = self.isc.cpu()
+        self.clip_score = self.clip_score.cpu()
+        torch.cuda.empty_cache()
+
+        logger.info(
+            "Eval done — FID=%.2f, IS=%.2f±%.2f, CLIP=%.3f.",
+            fid_val, is_mean.item(), is_std.item(), clip_val,
+        )
         return {
             "eval/fid": fid_val,
             "eval/is_mean": is_mean.item(),
