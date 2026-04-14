@@ -16,6 +16,7 @@ __all__ = ["FlowMatching", "_ot_reorder_noise"]
 logger = logging.getLogger(__name__)
 
 
+@torch.compiler.disable
 def _ot_reorder_noise(x_0: Tensor, noise: Tensor) -> Tensor:
     """Reorder noise to minimise intra-batch L2 transport cost.
 

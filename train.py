@@ -126,12 +126,6 @@ def main() -> None:
             )
             eval_engine = EvaluationEngine(config, val_dataloader, model, device)
 
-    # Compile text encoder after real-stats population: CUDA graphs no longer occupy
-    # VRAM during encoding, and the compiled model is available for cache_null_embed.
-    # VAE is intentionally not compiled (slicing + dynamic shapes make it incompatible).
-    if torch.cuda.is_available():
-        model.text_encoder = torch.compile(model.text_encoder, mode="reduce-overhead")
-
     # 3a. Cache null text embedding before offloading frozen models
     model.cache_null_embed(torch.device(device))
     if mode == "streaming":

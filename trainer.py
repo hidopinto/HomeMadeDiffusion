@@ -32,7 +32,7 @@ class DiTTrainer:
         self.eval_engine = eval_engine
 
         if torch.cuda.is_available():
-            self.model = torch.compile(self.model, mode="reduce-overhead")
+            self.model = torch.compile(self.model, mode="default")
 
         self.model, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
