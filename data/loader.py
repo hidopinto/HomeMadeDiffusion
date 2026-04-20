@@ -19,7 +19,11 @@ from data.vae_cache import VaeCacheManifest, VaeCachingEngine, VaeCachedDataset
 def _is_writable(path: Path) -> bool:
     try:
         path.mkdir(parents=True, exist_ok=True)
-        return os.access(path, os.W_OK)
+        probe = path / ".write_probe"
+        fd = os.open(str(probe), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        probe.unlink()
+        return True
     except OSError:
         return False
 
