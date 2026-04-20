@@ -5,7 +5,6 @@ import os
 import random
 import time
 from collections.abc import Iterator
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,9 @@ from typing import Any
 import datasets as hf_datasets
 from huggingface_hub import list_repo_files
 
-__all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset"]
+__all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset", "LATENT_SHARD_SIZE"]
+
+LATENT_SHARD_SIZE: int = 1000
 
 import numpy as np
 import torch
@@ -69,23 +70,35 @@ def _sync_captions_to_latents(captions_path: Path, existing_count: int) -> None:
 
 
 def _sync_latents_to_captions(captions_path: Path, latent_dir: Path) -> int:
-    """Delete latent files with no matching caption entry. Returns valid latent count.
+    """Validate shard files against captions. Returns valid latent count.
 
-    Called at resume time so that any latents saved by background executor threads
-    after a crash (with no corresponding caption) are cleaned up automatically.
+    For shard-based storage: counts from captions.jsonl and removes any shard files
+    that extend beyond the valid range. Raises if old per-file format is detected.
     """
+    old_files = next(latent_dir.glob("[0-9]*.pt"), None)
+    if old_files is not None:
+        raise RuntimeError(
+            f"[VaeCachingEngine] Old per-file latent format detected in {latent_dir}. "
+            "Run 'python scripts/migrate_latent_shards.py' to convert to shard format."
+        )
     if not captions_path.exists():
-        return len(list(latent_dir.glob("[0-9]*.pt")))
+        return 0
     with captions_path.open(encoding="utf-8") as f:
-        caption_ids: set[int] = {json.loads(line)["id"] for line in f if line.strip()}
+        existing_count = sum(1 for line in f if line.strip())
+    max_valid_shard = (existing_count - 1) // LATENT_SHARD_SIZE if existing_count > 0 else -1
     removed = 0
-    for pt in latent_dir.glob("[0-9]*.pt"):
-        if int(pt.stem) not in caption_ids:
+    for pt in latent_dir.glob("shard_*.pt"):
+        if pt.name.endswith(".tmp"):
+            pt.unlink(missing_ok=True)
+            removed += 1
+            continue
+        shard_id = int(pt.stem.split("_")[1])
+        if shard_id > max_valid_shard:
             pt.unlink(missing_ok=True)
             removed += 1
     if removed:
-        print(f"[VaeCachingEngine] Removed {removed} orphaned latent(s) with no caption.")
-    return len(caption_ids)
+        print(f"[VaeCachingEngine] Removed {removed} out-of-range shard(s).")
+    return existing_count
 
 
 def _build_shard_resume_dataset(
@@ -163,16 +176,15 @@ class VaeCachingEngine:
     Text encoding is deliberately skipped — CLIP runs per-step during training instead.
 
     Output layout:
-      {cache_dir}/latents/{index:06d}.pt  — one latent tensor per sample
-      {cache_dir}/captions.jsonl          — one JSON-encoded caption string per line
-      {cache_dir}/manifest.json           — VaeCacheManifest
-      {cache_dir}/shard_state.json        — current shard URL + its global start index
+      {cache_dir}/latents/shard_{id:06d}.pt  — stacked Tensor[N, C, H, W] per shard
+      {cache_dir}/captions.jsonl             — one JSON-encoded caption string per line
+      {cache_dir}/manifest.json              — VaeCacheManifest
+      {cache_dir}/shard_state.json           — current HF shard URL + its global start index
 
     Resumable: on restart, shard_state.json is used to reload the HF streaming dataset
-    starting from the right tar shard, then skip only the within-shard offset. This avoids
-    re-downloading all preceding shards. Falls back to .skip(N) if shard_state.json is absent.
-    Latent saves are atomic (tmp → rename). Captions are written after each batch's saves are
-    confirmed, so latent count and caption line count stay in sync.
+    starting from the right tar shard, then skip only the within-shard offset.
+    Shard writes are atomic (tmp → rename). Captions are written per-shard so that
+    existing_count is always shard-aligned on crash recovery.
     """
 
     def __init__(self, vae: LatentEncoderProtocol, config, device: str) -> None:
@@ -188,27 +200,31 @@ class VaeCachingEngine:
         self.max_retries = config.data.dataset_max_retries
 
     @staticmethod
-    def _save_latent(idx: int, latent: Tensor, latent_dir: Path) -> None:
-        dest = latent_dir / f"{idx:06d}.pt"
-        for attempt in range(3):
-            try:
-                with open(dest, "wb") as f:
-                    torch.save(latent.cpu(), f)
-                return
-            except OSError as e:
-                if e.errno == errno.ENOSPC and attempt < 2:
-                    wait = 2 ** attempt  # 1s, 2s
-                    print(
-                        f"[VaeCachingEngine] ENOSPC saving latent {idx} "
-                        f"(attempt {attempt + 1}/3), retrying in {wait}s ..."
-                    )
-                    time.sleep(wait)
-                    continue
-                print(
-                    f"[VaeCachingEngine] Failed to save latent {idx} "
-                    f"after {attempt + 1} attempt(s): {e}"
-                )
-                raise
+    def _write_latent_shard(shard_id: int, latents: Tensor, latent_dir: Path) -> None:
+        """Atomically write a stacked latent shard via tmp → rename."""
+        tmp = latent_dir / f"shard_{shard_id:06d}.pt.tmp"
+        dst = latent_dir / f"shard_{shard_id:06d}.pt"
+        torch.save(latents, tmp)
+        tmp.rename(dst)
+
+    @staticmethod
+    def _commit_shard(
+        shard_id: int,
+        global_idx: int,
+        buf: list[Tensor],
+        captions: list[str],
+        latent_dir: Path,
+        caption_file,
+    ) -> tuple[int, int]:
+        """Write one shard and its captions atomically. Returns (new_shard_id, new_global_idx)."""
+        VaeCachingEngine._write_latent_shard(shard_id, torch.stack(buf), latent_dir)
+        for j, cap in enumerate(captions):
+            caption_file.write(
+                json.dumps({"id": global_idx + j, "caption": cap}, ensure_ascii=False) + "\n"
+            )
+        caption_file.flush()
+        os.fsync(caption_file.fileno())
+        return shard_id + 1, global_idx + len(buf)
 
     @torch.no_grad()
     def _encode_batch(self, images: list, captions: list[str]) -> tuple[Tensor | None, list[str]]:
@@ -247,28 +263,14 @@ class VaeCachingEngine:
         self,
         images: list,
         captions: list[str],
-        global_idx: int,
-        latent_dir: Path,
-        caption_file,
-        executor: ThreadPoolExecutor,
-    ) -> tuple[list, list[str], int]:
-        """Encode and save a batch to disk. Returns ([], [], updated_global_idx)."""
+    ) -> tuple[Tensor | None, list[str]]:
+        """Encode a batch of images. Returns (latents_cpu | None, valid_captions)."""
         if not images:
-            return images, captions, global_idx
+            return None, []
         latents, valid_captions = self._encode_batch(images, captions)
         if latents is not None:
-            futures: list[Future] = [
-                executor.submit(self._save_latent, global_idx + j, latents[j], latent_dir)
-                for j in range(len(valid_captions))
-            ]
-            for f in futures:
-                f.result()
-            for j, cap in enumerate(valid_captions):
-                caption_file.write(json.dumps({"id": global_idx + j, "caption": cap}, ensure_ascii=False) + "\n")
-            caption_file.flush()
-            os.fsync(caption_file.fileno())
-            global_idx += len(valid_captions)
-        return [], [], global_idx
+            return latents.cpu(), valid_captions
+        return None, []
 
     def run(self, hf_dataset, cache_root: Path, split: str, hf_cache: str | None = None) -> Path:
         cache_dir = cache_root / self.dataset_name.replace("/", "--") / split
@@ -276,19 +278,14 @@ class VaeCachingEngine:
         latent_dir.mkdir(parents=True, exist_ok=True)
         captions_path = cache_dir / "captions.jsonl"
 
-        # Cast once; keep base_dataset so we can recreate the iterator on retry
         base_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
 
         _NON_RETRYABLE_ERRNOS = {errno.EIO, errno.EROFS, errno.EACCES}
 
         attempt = 0
         while True:
-            # Sync captions down to the raw file count, then drop latents with no caption.
-            # Together these handle all crash-recovery cases: orphaned captions (written
-            # after latent saves failed) and orphaned latents (saved by background executor
-            # threads after the caption-write was interrupted).
-            _sync_captions_to_latents(captions_path, len(list(latent_dir.glob("[0-9]*.pt"))))
             existing_count = _sync_latents_to_captions(captions_path, latent_dir)
+            _sync_captions_to_latents(captions_path, existing_count)
             shard_state = _load_shard_state(cache_dir)
             _last_recorded_url: str | None = shard_state["url"] if shard_state else None
 
@@ -306,22 +303,32 @@ class VaeCachingEngine:
                 dataset_iter = base_dataset
 
             global_idx = existing_count
+            shard_id = existing_count // LATENT_SHARD_SIZE
             images: list = []
             captions: list[str] = []
+            shard_buf: list[Tensor] = []
+            shard_captions: list[str] = []
 
-            # Create a fresh executor each attempt so stale futures from a previous
-            # failed attempt cannot interfere with the new iteration.
-            executor = ThreadPoolExecutor(max_workers=16)
             try:
                 with captions_path.open("a", encoding="utf-8") as caption_file:
                     for raw in dataset_iter:
                         url = raw.get("__url__", "")
                         if url and url != _last_recorded_url:
-                            # Flush buffered samples from the previous shard before recording
-                            # the new shard boundary so that shard_state["start"] is accurate.
-                            images, captions, global_idx = self._flush_batch(
-                                images, captions, global_idx, latent_dir, caption_file, executor
-                            )
+                            latents, valid_caps = self._flush_batch(images, captions)
+                            images, captions = [], []
+                            if latents is not None:
+                                for j in range(len(valid_caps)):
+                                    shard_buf.append(latents[j])
+                                    shard_captions.append(valid_caps[j])
+                            while len(shard_buf) >= LATENT_SHARD_SIZE:
+                                shard_id, global_idx = self._commit_shard(
+                                    shard_id, global_idx,
+                                    shard_buf[:LATENT_SHARD_SIZE],
+                                    shard_captions[:LATENT_SHARD_SIZE],
+                                    latent_dir, caption_file,
+                                )
+                                shard_buf = shard_buf[LATENT_SHARD_SIZE:]
+                                shard_captions = shard_captions[LATENT_SHARD_SIZE:]
                             _save_shard_state(cache_dir, {"url": url, "start": global_idx})
                             _last_recorded_url = url
 
@@ -329,21 +336,51 @@ class VaeCachingEngine:
                         captions.append(raw[self.caption_key])
 
                         if len(images) == self.encoding_batch_size:
-                            images, captions, global_idx = self._flush_batch(
-                                images, captions, global_idx, latent_dir, caption_file, executor
-                            )
-                            if global_idx % 10_000 == 0:
-                                print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
+                            latents, valid_caps = self._flush_batch(images, captions)
+                            images, captions = [], []
+                            if latents is not None:
+                                for j in range(len(valid_caps)):
+                                    shard_buf.append(latents[j])
+                                    shard_captions.append(valid_caps[j])
+                            while len(shard_buf) >= LATENT_SHARD_SIZE:
+                                shard_id, global_idx = self._commit_shard(
+                                    shard_id, global_idx,
+                                    shard_buf[:LATENT_SHARD_SIZE],
+                                    shard_captions[:LATENT_SHARD_SIZE],
+                                    latent_dir, caption_file,
+                                )
+                                shard_buf = shard_buf[LATENT_SHARD_SIZE:]
+                                shard_captions = shard_captions[LATENT_SHARD_SIZE:]
+                                if global_idx % 10_000 == 0:
+                                    print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
 
+                    # Flush remaining images
                     if images:
-                        _, _, global_idx = self._flush_batch(
-                            images, captions, global_idx, latent_dir, caption_file, executor
+                        latents, valid_caps = self._flush_batch(images, captions)
+                        if latents is not None:
+                            for j in range(len(valid_caps)):
+                                shard_buf.append(latents[j])
+                                shard_captions.append(valid_caps[j])
+
+                    # Flush remaining shard buffer (final partial shard)
+                    while len(shard_buf) >= LATENT_SHARD_SIZE:
+                        shard_id, global_idx = self._commit_shard(
+                            shard_id, global_idx,
+                            shard_buf[:LATENT_SHARD_SIZE],
+                            shard_captions[:LATENT_SHARD_SIZE],
+                            latent_dir, caption_file,
                         )
-                executor.shutdown(wait=True)
+                        shard_buf = shard_buf[LATENT_SHARD_SIZE:]
+                        shard_captions = shard_captions[LATENT_SHARD_SIZE:]
+                    if shard_buf:
+                        shard_id, global_idx = self._commit_shard(
+                            shard_id, global_idx,
+                            shard_buf, shard_captions,
+                            latent_dir, caption_file,
+                        )
                 break  # success
 
             except (OSError, TimeoutError, ConnectionError, RuntimeError) as e:
-                executor.shutdown(wait=False)
                 if isinstance(e, OSError) and e.errno in _NON_RETRYABLE_ERRNOS:
                     raise
                 attempt += 1
@@ -366,13 +403,12 @@ class VaeCachingEngine:
 
 class VaeCachedDataset(IterableDataset):
     """
-    Loads pre-cached VAE latents from disk and encodes captions with CLIP per micro-batch.
+    Loads pre-cached VAE latents from shard files and encodes captions with CLIP per micro-batch.
 
-    Latent tensors are loaded from {cache_dir}/latents/{index:06d}.pt; captions are read from
-    {cache_dir}/captions.jsonl. CLIP text encoding runs on GPU in micro-batches of
-    encoding_batch_size, identical to StreamingLatentDataset's pattern.
+    Latent shards are loaded from {cache_dir}/latents/shard_{id:06d}.pt; captions from
+    {cache_dir}/captions.jsonl. CLIP text encoding runs on GPU in micro-batches.
 
-    Output format per sample matches StreamingLatentDataset and LatentDataset exactly:
+    Output format per sample:
       {"latent": Tensor, "text_embed": {"hidden_states": Tensor, "attention_mask": Tensor}}
 
     Implements __len__ so DataLoader.len() works (used for LR schedule step counting).
@@ -394,6 +430,7 @@ class VaeCachedDataset(IterableDataset):
         self.text_encoders = text_encoders
         self.encoding_batch_size = config.data.encoding_batch_size
         self.device = device
+        self._shard_cache: dict[int, Tensor] = {}
 
         captions_path = self.cache_dir / "captions.jsonl"
         with captions_path.open("r", encoding="utf-8") as f:
@@ -407,6 +444,19 @@ class VaeCachedDataset(IterableDataset):
     def __len__(self) -> int:
         return self.num_samples
 
+    def _load_latent(self, idx: int) -> Tensor:
+        shard_id = idx // LATENT_SHARD_SIZE
+        local_idx = idx % LATENT_SHARD_SIZE
+        if shard_id not in self._shard_cache:
+            if len(self._shard_cache) >= 8:
+                self._shard_cache.pop(next(iter(self._shard_cache)))
+            self._shard_cache[shard_id] = torch.load(
+                self.latent_dir / f"shard_{shard_id:06d}.pt",
+                map_location="cpu",
+                weights_only=True,
+            )
+        return self._shard_cache[shard_id][local_idx]
+
     def iter_latents(self, batch_size: int) -> Iterator[Tensor]:
         """Yield batches of latents from disk without any text encoding.
 
@@ -416,22 +466,12 @@ class VaeCachedDataset(IterableDataset):
         indices = list(self.captions.keys())
         for start in range(0, len(indices), batch_size):
             batch_ids = indices[start : start + batch_size]
-            yield torch.stack([
-                torch.load(
-                    self.latent_dir / f"{i:06d}.pt",
-                    map_location="cpu",
-                    weights_only=True,
-                )
-                for i in batch_ids
-            ])
+            yield torch.stack([self._load_latent(i) for i in batch_ids])
 
     def _yield_encoded_micro_batch(
         self, indices: list[int], captions: list[str]
     ) -> Iterator[dict[str, Tensor | dict[str, Tensor]]]:
-        latents = torch.stack([
-            torch.load(self.latent_dir / f"{i:06d}.pt", map_location="cpu", weights_only=True)
-            for i in indices
-        ]).to(self.device)
+        latents = torch.stack([self._load_latent(i) for i in indices]).to(self.device)
 
         text_inputs = self.tokenizer(
             captions,
