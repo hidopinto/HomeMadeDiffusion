@@ -117,6 +117,7 @@ class DiT(nn.Module):
             cross_attn_class: type | None = None,
             gradient_checkpointing: bool = False,
             use_reentrant: bool = False,
+            compile_blocks: bool = False,
     ) -> None:
         super().__init__()
         self.is_video = is_video
@@ -132,11 +133,14 @@ class DiT(nn.Module):
         self.pos_embedder = pos_embedder
         self.t_embedder = TimestepEmbedder(hidden_size, frequency_embedding_size, max_period)
 
-        self.blocks = nn.ModuleList([
+        blocks = [
             DiT._build_block(hidden_size, num_heads, processor_class,
                              conditioner_class, cross_attn_class)
             for _ in range(depth)
-        ])
+        ]
+        if compile_blocks:
+            blocks = [torch.compile(b, mode="default") for b in blocks]
+        self.blocks = nn.ModuleList(blocks)
 
         self.final_layer = FinalLayer(hidden_size, patch_size, out_channels)
 

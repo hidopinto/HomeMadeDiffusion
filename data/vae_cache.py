@@ -117,17 +117,21 @@ class VaeCacheManifest:
     image_size: int
     vae_model_id: str
     num_samples: int
+    complete: bool = False  # True only after the full dataset stream has been exhausted
 
     def save(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
 
     @classmethod
     def load(cls, path: Path) -> "VaeCacheManifest":
-        return cls(**json.loads(path.read_text()))
+        data = json.loads(path.read_text())
+        data.setdefault("complete", False)  # backward-compat: old manifests land as incomplete
+        return cls(**data)
 
     def matches(self, config) -> bool:
         return (
-            self.dataset_name == config.data.dataset_name
+            self.complete  # incomplete caches always trigger a caching resume
+            and self.dataset_name == config.data.dataset_name
             and self.image_size == config.data.image_size
             and self.vae_model_id == config.external_models.vae
         )
@@ -321,6 +325,7 @@ class VaeCachingEngine:
             image_size=self.image_size,
             vae_model_id=self.vae_model_id,
             num_samples=global_idx,
+            complete=True,
         )
         manifest.save(cache_dir / "manifest.json")
         print(f"[VaeCachingEngine] Done. {global_idx:,} samples cached to {cache_dir}")

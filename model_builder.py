@@ -122,6 +122,7 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         cross_attn_class=CrossAttention if use_cross_attn else None,
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
+        compile_blocks=torch.cuda.is_available(),
     )
     num_params = sum(p.numel() for p in model_core.parameters())
     logger.info("DiT built: %.2fM trainable parameters.", num_params / 1e6)

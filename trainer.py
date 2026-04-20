@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 import os
 import time
@@ -10,6 +11,26 @@ import wandb
 from accelerate import Accelerator
 
 logger = logging.getLogger(__name__)
+
+
+def _log_cuda_mem(tag: str) -> None:
+    alloc = torch.cuda.memory_allocated() / 1024 ** 3
+    reserved = torch.cuda.memory_reserved() / 1024 ** 3
+    logger.info("[MEM %s] allocated=%.2f GB  reserved=%.2f GB", tag, alloc, reserved)
+
+
+def _log_top_tensors(tag: str, top_n: int = 30) -> None:
+    entries: list[tuple[int, torch.Size, torch.dtype]] = []
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.Tensor) and obj.is_cuda:
+                entries.append((obj.element_size() * obj.nelement(), obj.shape, obj.dtype))
+        except Exception:
+            pass
+    entries.sort(key=lambda x: x[0], reverse=True)
+    logger.info("[MEM %s] top %d live CUDA tensors:", tag, min(top_n, len(entries)))
+    for size, shape, dtype in entries[:top_n]:
+        logger.info("  %8.1f MB  %-14s  %s", size / 1e6, str(dtype).replace("torch.", ""), shape)
 
 
 class DiTTrainer:
@@ -34,24 +55,30 @@ class DiTTrainer:
 
         self.eval_engine = eval_engine
 
-        logger.info("torch.compile starting...")
-        if torch.cuda.is_available():
-            self.model = torch.compile(self.model, mode="default")
-        logger.info("torch.compile done.")
-
         logger.info("accelerator.prepare starting...")
         self.model, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
         logger.info("accelerator.prepare done.")
 
-    def train_step(self, batch: dict, global_step: int) -> tuple[torch.Tensor, dict]:
+    def train_step(self, batch: dict, global_step: int, _diag: bool = False) -> tuple[torch.Tensor, dict]:
         latents = batch["latent"]
         text_embeds = batch["text_embed"]
         grad_log: dict[str, float] = {}
         with self.accelerator.accumulate(self.model):
             loss = self.model(latents, text_embeds)
-            self.accelerator.backward(loss)
+
+            if _diag:
+                _log_cuda_mem("after-forward")
+                _log_top_tensors("after-forward")
+
+            try:
+                self.accelerator.backward(loss)
+            except torch.cuda.OutOfMemoryError:
+                _log_cuda_mem("oom")
+                _log_top_tensors("oom")
+                logger.error("[MEM oom] memory_summary:\n%s", torch.cuda.memory_summary(abbreviated=False))
+                raise
 
             if self.accelerator.sync_gradients:
                 clip_norm = getattr(self.config.training, "gradient_clip_norm", None)
@@ -133,6 +160,7 @@ class DiTTrainer:
             self.accelerator.print(f"Resumed training from step {global_step}")
 
         _first_step_logged = False
+        _diag_done = False
         for epoch in range(epochs):
             self.model.train()
             epoch_loss = 0.0
@@ -140,8 +168,14 @@ class DiTTrainer:
             t_start = time.time()
             logger.info("Epoch %d/%d — starting.", epoch + 1, epochs)
 
+            if epoch == 0:
+                _log_cuda_mem("before-first-batch")
+                _log_top_tensors("before-first-batch")
+
             for batch in self.dataloader:
-                loss, grad_log = self.train_step(batch, global_step)
+                _diag = not _diag_done
+                loss, grad_log = self.train_step(batch, global_step, _diag=_diag)
+                _diag_done = True
                 if not _first_step_logged:
                     logger.info("First batch complete — training loop running.")
                     _first_step_logged = True
