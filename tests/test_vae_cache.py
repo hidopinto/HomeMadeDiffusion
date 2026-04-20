@@ -30,7 +30,7 @@ def _make_fake_cache(tmp_path: Path, num_samples: int) -> Path:
 
 
 def _config() -> SimpleNamespace:
-    return SimpleNamespace(data=SimpleNamespace(encoding_batch_size=4))
+    return SimpleNamespace(data=SimpleNamespace(encoding_batch_size=4, latent_shard_size=1000))
 
 
 def _dummy_encoder_args() -> tuple:

@@ -12,9 +12,7 @@ from typing import Any
 import datasets as hf_datasets
 from huggingface_hub import list_repo_files
 
-__all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset", "LATENT_SHARD_SIZE"]
-
-LATENT_SHARD_SIZE: int = 1000
+__all__ = ["VaeCacheManifest", "VaeCachingEngine", "VaeCachedDataset"]
 
 import numpy as np
 import torch
@@ -69,11 +67,12 @@ def _sync_captions_to_latents(captions_path: Path, existing_count: int) -> None:
     tmp.rename(captions_path)
 
 
-def _sync_latents_to_captions(captions_path: Path, latent_dir: Path) -> int:
+def _sync_latents_to_captions(captions_path: Path, latent_dir: Path, shard_size: int) -> int:
     """Validate shard files against captions. Returns valid latent count.
 
     For shard-based storage: counts from captions.jsonl and removes any shard files
     that extend beyond the valid range. Raises if old per-file format is detected.
+    Aligns down to shard boundary to prevent overwrite on resume.
     """
     old_files = next(latent_dir.glob("[0-9]*.pt"), None)
     if old_files is not None:
@@ -85,7 +84,21 @@ def _sync_latents_to_captions(captions_path: Path, latent_dir: Path) -> int:
         return 0
     with captions_path.open(encoding="utf-8") as f:
         existing_count = sum(1 for line in f if line.strip())
-    max_valid_shard = (existing_count - 1) // LATENT_SHARD_SIZE if existing_count > 0 else -1
+
+    partial = existing_count % shard_size
+    if partial != 0:
+        aligned_count = existing_count - partial
+        partial_shard_id = aligned_count // shard_size
+        partial_shard = latent_dir / f"shard_{partial_shard_id:06d}.pt"
+        if partial_shard.exists():
+            partial_shard.unlink()
+            print(
+                f"[VaeCachingEngine] Deleted partial shard {partial_shard.name} "
+                f"({partial} samples will be re-encoded on resume)"
+            )
+        existing_count = aligned_count
+
+    max_valid_shard = (existing_count - 1) // shard_size if existing_count > 0 else -1
     removed = 0
     for pt in latent_dir.glob("shard_*.pt"):
         if pt.name.endswith(".tmp"):
@@ -198,6 +211,7 @@ class VaeCachingEngine:
         self.device = device
         self.vae_model_id = config.external_models.vae
         self.max_retries = config.data.dataset_max_retries
+        self.shard_size = config.data.latent_shard_size
 
     @staticmethod
     def _write_latent_shard(shard_id: int, latents: Tensor, latent_dir: Path) -> None:
@@ -284,9 +298,11 @@ class VaeCachingEngine:
 
         attempt = 0
         while True:
-            existing_count = _sync_latents_to_captions(captions_path, latent_dir)
+            existing_count = _sync_latents_to_captions(captions_path, latent_dir, self.shard_size)
             _sync_captions_to_latents(captions_path, existing_count)
             shard_state = _load_shard_state(cache_dir)
+            if shard_state and shard_state["start"] > existing_count:
+                shard_state = None
             _last_recorded_url: str | None = shard_state["url"] if shard_state else None
 
             if existing_count > 0 and shard_state and hf_cache is not None:
@@ -303,7 +319,7 @@ class VaeCachingEngine:
                 dataset_iter = base_dataset
 
             global_idx = existing_count
-            shard_id = existing_count // LATENT_SHARD_SIZE
+            shard_id = existing_count // self.shard_size
             images: list = []
             captions: list[str] = []
             shard_buf: list[Tensor] = []
@@ -320,15 +336,15 @@ class VaeCachingEngine:
                                 for j in range(len(valid_caps)):
                                     shard_buf.append(latents[j])
                                     shard_captions.append(valid_caps[j])
-                            while len(shard_buf) >= LATENT_SHARD_SIZE:
+                            while len(shard_buf) >= self.shard_size:
                                 shard_id, global_idx = self._commit_shard(
                                     shard_id, global_idx,
-                                    shard_buf[:LATENT_SHARD_SIZE],
-                                    shard_captions[:LATENT_SHARD_SIZE],
+                                    shard_buf[:self.shard_size],
+                                    shard_captions[:self.shard_size],
                                     latent_dir, caption_file,
                                 )
-                                shard_buf = shard_buf[LATENT_SHARD_SIZE:]
-                                shard_captions = shard_captions[LATENT_SHARD_SIZE:]
+                                shard_buf = shard_buf[self.shard_size:]
+                                shard_captions = shard_captions[self.shard_size:]
                             _save_shard_state(cache_dir, {"url": url, "start": global_idx})
                             _last_recorded_url = url
 
@@ -342,15 +358,15 @@ class VaeCachingEngine:
                                 for j in range(len(valid_caps)):
                                     shard_buf.append(latents[j])
                                     shard_captions.append(valid_caps[j])
-                            while len(shard_buf) >= LATENT_SHARD_SIZE:
+                            while len(shard_buf) >= self.shard_size:
                                 shard_id, global_idx = self._commit_shard(
                                     shard_id, global_idx,
-                                    shard_buf[:LATENT_SHARD_SIZE],
-                                    shard_captions[:LATENT_SHARD_SIZE],
+                                    shard_buf[:self.shard_size],
+                                    shard_captions[:self.shard_size],
                                     latent_dir, caption_file,
                                 )
-                                shard_buf = shard_buf[LATENT_SHARD_SIZE:]
-                                shard_captions = shard_captions[LATENT_SHARD_SIZE:]
+                                shard_buf = shard_buf[self.shard_size:]
+                                shard_captions = shard_captions[self.shard_size:]
                                 if global_idx % 10_000 == 0:
                                     print(f"[VaeCachingEngine] Cached {global_idx:,} samples ...")
 
@@ -363,15 +379,15 @@ class VaeCachingEngine:
                                 shard_captions.append(valid_caps[j])
 
                     # Flush remaining shard buffer (final partial shard)
-                    while len(shard_buf) >= LATENT_SHARD_SIZE:
+                    while len(shard_buf) >= self.shard_size:
                         shard_id, global_idx = self._commit_shard(
                             shard_id, global_idx,
-                            shard_buf[:LATENT_SHARD_SIZE],
-                            shard_captions[:LATENT_SHARD_SIZE],
+                            shard_buf[:self.shard_size],
+                            shard_captions[:self.shard_size],
                             latent_dir, caption_file,
                         )
-                        shard_buf = shard_buf[LATENT_SHARD_SIZE:]
-                        shard_captions = shard_captions[LATENT_SHARD_SIZE:]
+                        shard_buf = shard_buf[self.shard_size:]
+                        shard_captions = shard_captions[self.shard_size:]
                     if shard_buf:
                         shard_id, global_idx = self._commit_shard(
                             shard_id, global_idx,
@@ -429,6 +445,7 @@ class VaeCachedDataset(IterableDataset):
         self.tokenizer = tokenizer
         self.text_encoders = text_encoders
         self.encoding_batch_size = config.data.encoding_batch_size
+        self.shard_size = config.data.latent_shard_size
         self.device = device
         self._shard_cache: dict[int, Tensor] = {}
 
@@ -445,8 +462,8 @@ class VaeCachedDataset(IterableDataset):
         return self.num_samples
 
     def _load_latent(self, idx: int) -> Tensor:
-        shard_id = idx // LATENT_SHARD_SIZE
-        local_idx = idx % LATENT_SHARD_SIZE
+        shard_id = idx // self.shard_size
+        local_idx = idx % self.shard_size
         if shard_id not in self._shard_cache:
             if len(self._shard_cache) >= 8:
                 self._shard_cache.pop(next(iter(self._shard_cache)))

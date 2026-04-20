@@ -92,6 +92,7 @@ data:
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
+  latent_shard_size: 1000    # latents per shard file (must match migration script SHARD_SIZE)
 
 inference:
   out_dir: "/media/hido-pinto/מחסן/outputs"
