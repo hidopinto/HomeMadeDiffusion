@@ -68,6 +68,26 @@ def _sync_captions_to_latents(captions_path: Path, existing_count: int) -> None:
     tmp.rename(captions_path)
 
 
+def _sync_latents_to_captions(captions_path: Path, latent_dir: Path) -> int:
+    """Delete latent files with no matching caption entry. Returns valid latent count.
+
+    Called at resume time so that any latents saved by background executor threads
+    after a crash (with no corresponding caption) are cleaned up automatically.
+    """
+    if not captions_path.exists():
+        return len(list(latent_dir.glob("[0-9]*.pt")))
+    with captions_path.open(encoding="utf-8") as f:
+        caption_ids: set[int] = {json.loads(line)["id"] for line in f if line.strip()}
+    removed = 0
+    for pt in latent_dir.glob("[0-9]*.pt"):
+        if int(pt.stem) not in caption_ids:
+            pt.unlink(missing_ok=True)
+            removed += 1
+    if removed:
+        print(f"[VaeCachingEngine] Removed {removed} orphaned latent(s) with no caption.")
+    return len(caption_ids)
+
+
 def _build_shard_resume_dataset(
     dataset_name: str,
     split: str,
@@ -169,9 +189,26 @@ class VaeCachingEngine:
 
     @staticmethod
     def _save_latent(idx: int, latent: Tensor, latent_dir: Path) -> None:
-        tmp = latent_dir / f"tmp_{idx:06d}.pt"
-        torch.save(latent.cpu(), tmp)
-        tmp.rename(latent_dir / f"{idx:06d}.pt")
+        dest = latent_dir / f"{idx:06d}.pt"
+        for attempt in range(3):
+            try:
+                with open(dest, "wb") as f:
+                    torch.save(latent.cpu(), f)
+                return
+            except OSError as e:
+                if e.errno == errno.ENOSPC and attempt < 2:
+                    wait = 2 ** attempt  # 1s, 2s
+                    print(
+                        f"[VaeCachingEngine] ENOSPC saving latent {idx} "
+                        f"(attempt {attempt + 1}/3), retrying in {wait}s ..."
+                    )
+                    time.sleep(wait)
+                    continue
+                print(
+                    f"[VaeCachingEngine] Failed to save latent {idx} "
+                    f"after {attempt + 1} attempt(s): {e}"
+                )
+                raise
 
     @torch.no_grad()
     def _encode_batch(self, images: list, captions: list[str]) -> tuple[Tensor | None, list[str]]:
@@ -242,23 +279,18 @@ class VaeCachingEngine:
         # Cast once; keep base_dataset so we can recreate the iterator on retry
         base_dataset = hf_dataset.cast_column(self.image_key, hf_datasets.Image(decode=False))
 
-        _NON_RETRYABLE_ERRNOS = {errno.EIO, errno.ENOSPC, errno.EROFS, errno.EACCES}
+        _NON_RETRYABLE_ERRNOS = {errno.EIO, errno.EROFS, errno.EACCES}
 
         attempt = 0
         while True:
-            # Clean up any orphaned tmp files from a previous crashed save before recounting.
-            for f in latent_dir.glob("tmp_*.pt"):
-                f.unlink(missing_ok=True)
-
-            # Recount from disk — this is the authoritative resume offset.
-            # Use [0-9]* to exclude tmp_*.pt files that may survive a crash between
-            # torch.save() and the rename() call.
-            existing_count = len(list(latent_dir.glob("[0-9]*.pt")))
+            # Sync captions down to the raw file count, then drop latents with no caption.
+            # Together these handle all crash-recovery cases: orphaned captions (written
+            # after latent saves failed) and orphaned latents (saved by background executor
+            # threads after the caption-write was interrupted).
+            _sync_captions_to_latents(captions_path, len(list(latent_dir.glob("[0-9]*.pt"))))
+            existing_count = _sync_latents_to_captions(captions_path, latent_dir)
             shard_state = _load_shard_state(cache_dir)
             _last_recorded_url: str | None = shard_state["url"] if shard_state else None
-
-            # Sync captions to the authoritative latent count before appending more.
-            _sync_captions_to_latents(captions_path, existing_count)
 
             if existing_count > 0 and shard_state and hf_cache is not None:
                 resume_ds, within_skip = _build_shard_resume_dataset(
