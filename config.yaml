@@ -60,7 +60,8 @@ training:
   eval_every_steps: 20000   # Run FID/IS/CLIP eval every N optimizer steps
 #  eval_every_steps: False   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
-  eval_batch_size: 32      # Generation batch size during eval; no gradients → safe on 3090 (was 16)
+  eval_batch_size: 64      # Generation batch size during eval; no gradients → safe on 3090 Ti (was 32)
+  eval_num_steps: 20       # Diffusion steps for eval-time generation (separate from training inference_every_steps)
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled

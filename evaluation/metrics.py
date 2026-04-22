@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import torch
 from torch import Tensor
@@ -14,6 +15,17 @@ __all__ = ["EvaluationEngine"]
 logger = logging.getLogger(__name__)
 
 _MIN_FID_SAMPLES = 2048
+
+
+def _fid_stats_path(config, max_real: int) -> Path:
+    """Return the path where FID real-image stats are cached for this config."""
+    cache_dir = (
+        Path(config.data.vae_cache_dir)
+        / config.data.dataset_name.replace("/", "--")
+        / "train"
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"fid_real_stats_n{max_real}.pt"
 
 
 class EvaluationEngine:
@@ -43,7 +55,8 @@ class EvaluationEngine:
             self.eval_prompts = [line.strip() for line in f if line.strip()]
 
         sampler_cfg = config.diffusion.samplers[config.diffusion.sampler]
-        self.num_steps: int = getattr(sampler_cfg, "num_steps", 50)
+        sampler_default_steps: int = getattr(sampler_cfg, "num_steps", 50)
+        self.num_steps: int = getattr(config.training, "eval_num_steps", sampler_default_steps)
         self.eta: float = getattr(sampler_cfg, "eta", 0.0)
         self.guidance_scale: float = getattr(config.training, "guidance_scale", 7.5)
         self.height: int = getattr(config.training, "inference_height", 512)
@@ -56,8 +69,30 @@ class EvaluationEngine:
         self.clip_score = CLIPScore(model_name_or_path="openai/clip-vit-large-patch14").to(device)
         logger.info("  Metric models on device.")
 
-        logger.info("  Pre-populating FID real statistics...")
-        self._populate_real_stats(val_dataloader, model)
+        max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
+        fid_stats_path = _fid_stats_path(config, max_real)
+        if fid_stats_path.exists():
+            logger.info("  Loading cached FID real stats from %s...", fid_stats_path)
+            stats = torch.load(fid_stats_path, map_location=device, weights_only=True)
+            self._real_sum = stats["real_sum"].to(device)
+            self._real_cov_sum = stats["real_cov_sum"].to(device)
+            self._real_num = stats["real_num"].to(device)
+            logger.info(
+                "  FID real stats loaded (%d images). Skipping val encoding.",
+                int(self._real_num.item()),
+            )
+        else:
+            logger.info("  Pre-populating FID real statistics (one-time, will be cached)...")
+            self._populate_real_stats(val_dataloader, model, max_real)
+            torch.save(
+                {
+                    "real_sum": self._real_sum.cpu(),
+                    "real_cov_sum": self._real_cov_sum.cpu(),
+                    "real_num": self._real_num.cpu(),
+                },
+                fid_stats_path,
+            )
+            logger.info("  FID real stats saved to %s.", fid_stats_path)
 
         # Offload metric models to CPU — they are only needed during compute().
         # Leaving them on GPU would pin ~1.1 GB of VRAM for the entire training run.
@@ -67,7 +102,7 @@ class EvaluationEngine:
         torch.cuda.empty_cache()
         logger.info("EvaluationEngine ready (metrics offloaded to CPU until first eval).")
 
-    def _populate_real_stats(self, val_dataloader: DataLoader, model) -> None:
+    def _populate_real_stats(self, val_dataloader: DataLoader, model, max_real: int) -> None:
         """Decode val latents and update FID real-image statistics.
 
         ``self.isc`` and ``self.clip_score`` are unused during this method.
@@ -81,7 +116,6 @@ class EvaluationEngine:
         encoder.
         """
         scale_factor: float = self.config.dit.vae_scale_factor
-        max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
         count: int = 0
         logger.info("  Decoding up to %d real images for FID reference stats...", max_real)
 

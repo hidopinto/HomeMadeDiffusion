@@ -458,6 +458,13 @@ class VaeCachedDataset(IterableDataset):
             }
         self.num_samples = len(self.captions)
 
+        # Precompute shard → sample-id mapping so __iter__ can shuffle at shard level
+        # rather than globally. Eliminates per-micro-batch random shard thrashing.
+        self._shard_to_indices: dict[int, list[int]] = {}
+        for idx in self.captions:
+            sid = idx // self.shard_size
+            self._shard_to_indices.setdefault(sid, []).append(idx)
+
     def __len__(self) -> int:
         return self.num_samples
 
@@ -519,16 +526,24 @@ class VaeCachedDataset(IterableDataset):
             yield sample
 
     def __iter__(self) -> Iterator[dict[str, Tensor | dict[str, Tensor]]]:
-        indices = list(self.captions.keys())
-        random.shuffle(indices)
+        # Shard-level shuffle: randomise shard visitation order each epoch, then
+        # shuffle samples within each shard. A micro-batch of encoding_batch_size
+        # samples therefore touches at most 2 consecutive shards (at a boundary),
+        # vs the ~580 shards that a full global shuffle would require. Disk I/O
+        # per micro-batch drops from ~36 GB (random) to ~63 MB (sequential shard).
+        shard_order = list(self._shard_to_indices.keys())
+        random.shuffle(shard_order)
         batch_indices: list[int] = []
         batch_captions: list[str] = []
-        for idx in indices:
-            batch_indices.append(idx)
-            batch_captions.append(self.captions[idx])
-            if len(batch_indices) == self.encoding_batch_size:
-                yield from self._yield_encoded_micro_batch(batch_indices, batch_captions)
-                batch_indices = []
-                batch_captions = []
+        for shard_id in shard_order:
+            shard_idxs = list(self._shard_to_indices[shard_id])
+            random.shuffle(shard_idxs)
+            for idx in shard_idxs:
+                batch_indices.append(idx)
+                batch_captions.append(self.captions[idx])
+                if len(batch_indices) == self.encoding_batch_size:
+                    yield from self._yield_encoded_micro_batch(batch_indices, batch_captions)
+                    batch_indices = []
+                    batch_captions = []
         if batch_indices:
             yield from self._yield_encoded_micro_batch(batch_indices, batch_captions)

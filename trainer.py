@@ -91,10 +91,14 @@ class DiTTrainer:
                     unwrapped = self.accelerator.unwrap_model(self.model)
                     transformer = unwrapped.transformer
 
+                    # Collect all norm tensors first, then batch-convert to float with a
+                    # single pass of .item() calls. Avoids repeated GPU→CPU sync stalls.
+                    norm_tensors: dict[str, torch.Tensor] = {}
+
                     for i, block in enumerate(transformer.blocks):
                         grads = [p.grad.data.flatten() for p in block.parameters() if p.grad is not None]
                         if grads:
-                            grad_log[f"grad_norm/block_{i:02d}"] = torch.cat(grads).norm(2).item()
+                            norm_tensors[f"grad_norm/block_{i:02d}"] = torch.cat(grads).norm(2)
 
                     for name, module in [
                         ("patch_embed", transformer.patch_embed),
@@ -103,7 +107,7 @@ class DiTTrainer:
                     ]:
                         grads = [p.grad.data.flatten() for p in module.parameters() if p.grad is not None]
                         if grads:
-                            grad_log[f"grad_norm/{name}"] = torch.cat(grads).norm(2).item()
+                            norm_tensors[f"grad_norm/{name}"] = torch.cat(grads).norm(2)
 
                     # condition_manager lives on LatentDiffusion, not DiT
                     condition_manager = unwrapped.condition_manager
@@ -111,11 +115,13 @@ class DiTTrainer:
                         key = "adaln_projector" if getattr(proj, "role", "") == "global" else "crossattn_projector"
                         grads = [p.grad.data.flatten() for p in proj.parameters() if p.grad is not None]
                         if grads:
-                            grad_log[f"grad_norm/{key}"] = torch.cat(grads).norm(2).item()
+                            norm_tensors[f"grad_norm/{key}"] = torch.cat(grads).norm(2)
 
                     grads = [p.grad.data.flatten() for p in condition_manager.parameters() if p.grad is not None]
                     if grads:
-                        grad_log["grad_norm/condition_manager"] = torch.cat(grads).norm(2).item()
+                        norm_tensors["grad_norm/condition_manager"] = torch.cat(grads).norm(2)
+
+                    grad_log.update({k: v.item() for k, v in norm_tensors.items()})
 
                     # Block-depth bar chart — shows which layers carry the gradient signal
                     if self.accelerator.is_main_process:
@@ -179,12 +185,14 @@ class DiTTrainer:
                 if not _first_step_logged:
                     logger.info("First batch complete — training loop running.")
                     _first_step_logged = True
-                loss_val = loss.item()
-                epoch_loss += loss_val
                 epoch_steps += 1
 
                 if self.accelerator.sync_gradients:
                     global_step += 1
+                    # Defer .item() to here so we only sync GPU→CPU when we actually
+                    # need the scalar for logging, not on every micro-step.
+                    loss_val = loss.item()
+                    epoch_loss += loss_val
                     current_lr = self.optimizer.param_groups[0]["lr"]
                     self.accelerator.log({
                         "train/loss": loss_val,
