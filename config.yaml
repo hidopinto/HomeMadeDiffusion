@@ -55,14 +55,15 @@ training:
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
-  save_every_steps: 5000    # Save checkpoint every N optimizer steps
+  save_every_steps: 10000    # Save checkpoint every N optimizer steps
   checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
-  eval_every_steps: 5000   # Run FID/IS/CLIP eval every N optimizer steps
+  eval_every_steps: 20000   # Run FID/IS/CLIP eval every N optimizer steps
+#  eval_every_steps: False   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
   eval_batch_size: 32      # Generation batch size during eval; no gradients → safe on 3090 (was 16)
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
-  inference_every_steps: 2000  # Run inference every N optimizer steps; False = disabled
+  inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
   inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
   inference_height: 512    # must match data.image_size
@@ -88,7 +89,7 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 1024   # CLIP-only at train time (~0.5 MB/sample); serves ~5 training batches per call. Lower to 45 if re-caching VAE.
+  encoding_batch_size: 600   # CLIP-only at train time (~0.5 MB/sample); serves ~5 training batches per call. Lower to 45 if re-caching VAE.
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
