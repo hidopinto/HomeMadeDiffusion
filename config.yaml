@@ -42,7 +42,7 @@ dit:
 
 training:
   # epochs: 500
-  epochs: 2   # 2 × 125K = 250K total steps; warmup ends at step 12.5K, cosine decay completes at 250K
+  epochs: 3   # 3 × 57,128 = 171K total steps; same ~33M sample exposure as original 250K×128 plan
   lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
   warmup_ratio: 0.10                  # fraction of total optimizer steps for warmup (ignored by "constant")
@@ -51,7 +51,7 @@ training:
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 128            # increased from 96; training-batch tensor is tiny (~37 MB), fewer steps/epoch
+  batch_size: 192            # 1.5x from 128; estimated ~21 GB peak on 3090 Ti (fall back to 160 if OOM)
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
@@ -78,7 +78,7 @@ general:
 data:
   mode: "cache_then_train"   # "cache" | "streaming" | "cache_then_train" (VAE cache pass then train)
   vae_cache_dir: "/media/hido-pinto/מחסן/vae_cache"  # latents + captions stored here (~384 GB)
-  steps_per_epoch: 125000    # used for streaming/cache_then_train LR schedule; set to null to use len(dataloader)
+  steps_per_epoch: null       # auto-computed from len(dataloader); 10.97M samples / 192 = 57,128 steps
   dataset_name: "pixparse/cc12m-wds"  # ~12M images, pre-hosted on HF Hub as WebDataset shards
   # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
   split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
@@ -88,7 +88,7 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  encoding_batch_size: 45     # disable_slicing with batch=32 → peak ~8-9 GB; batch=64 needs ~25 GB (OOM)
+  encoding_batch_size: 1024   # CLIP-only at train time (~0.5 MB/sample); serves ~5 training batches per call. Lower to 45 if re-caching VAE.
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
   dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
