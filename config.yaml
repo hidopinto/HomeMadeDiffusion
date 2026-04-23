@@ -98,3 +98,6 @@ data:
 
 inference:
   out_dir: "/media/hido-pinto/מחסן/outputs"
+
+evaluation:
+  clip_model_name: "openai/clip-vit-large-patch14"

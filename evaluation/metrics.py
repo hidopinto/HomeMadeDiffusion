@@ -9,12 +9,39 @@ from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.inception import InceptionScore
 from torchmetrics.multimodal.clip_score import CLIPScore
+from transformers import CLIPModel, CLIPProcessor
 
 __all__ = ["EvaluationEngine"]
 
 logger = logging.getLogger(__name__)
 
 _MIN_FID_SAMPLES = 2048
+
+
+class _CLIPModelWrapper(torch.nn.Module):
+    """Adapts transformers 5.x CLIPModel to the interface torchmetrics expects.
+
+    In transformers >= 5.0, get_image_features() and get_text_features() return
+    BaseModelOutputWithPooling instead of a plain Tensor. torchmetrics calls
+    .norm() on the return value, which breaks. This wrapper extracts
+    .pooler_output so the return value is always a Tensor.
+    """
+
+    def __init__(self, model: torch.nn.Module) -> None:
+        super().__init__()
+        self.clip = model  # registered submodule → .to() / .cpu() propagate
+
+    def get_image_features(self, *args, **kwargs) -> Tensor:
+        out = self.clip.get_image_features(*args, **kwargs)
+        return out.pooler_output if hasattr(out, "pooler_output") else out
+
+    def get_text_features(self, *args, **kwargs) -> Tensor:
+        out = self.clip.get_text_features(*args, **kwargs)
+        return out.pooler_output if hasattr(out, "pooler_output") else out
+
+    @property
+    def config(self):
+        return self.clip.config
 
 
 def _fid_stats_path(config, max_real: int) -> Path:
@@ -62,11 +89,16 @@ class EvaluationEngine:
         self.height: int = getattr(config.training, "inference_height", 512)
         self.width: int = getattr(config.training, "inference_width", 512)
         self.scheduler: str = config.diffusion.sampler
+        clip_model_name: str = getattr(
+            getattr(config, "evaluation", object()), "clip_model_name",
+            "openai/clip-vit-large-patch14",
+        )
 
         logger.info("Initialising evaluation metrics (FID + IS + CLIPScore)...")
         self.fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
         self.isc = InceptionScore(normalize=True).to(device)
-        self.clip_score = CLIPScore(model_name_or_path="openai/clip-vit-large-patch14").to(device)
+        self.clip_score = CLIPScore(model_name_or_path=clip_model_name).to(device)
+        self.clip_score.model = _CLIPModelWrapper(self.clip_score.model)
         logger.info("  Metric models on device.")
 
         max_real: int = max(_MIN_FID_SAMPLES, min(self.eval_num_samples * 4, 10_000))
