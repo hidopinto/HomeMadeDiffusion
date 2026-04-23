@@ -260,19 +260,15 @@ class EvaluationEngine:
 
         model.transformer.train()
 
-        # Update IS and CLIP Score incrementally
-        for i, (img_batch, prompt) in enumerate(
-            zip(fake_imgs, _iter_batches(batch_prompts, self.eval_batch_size))
+        # Update FID / IS / CLIPScore incrementally — no monolithic GPU transfer
+        for img_batch, prompt in zip(
+            fake_imgs, _iter_batches(batch_prompts, self.eval_batch_size)
         ):
             imgs_gpu = img_batch.to(self.device)
+            self.fid.update(imgs_gpu, real=False)
             self.isc.update(imgs_gpu)
-
             imgs_uint8 = (imgs_gpu * 255).clamp(0, 255).to(torch.uint8)
             self.clip_score.update(imgs_uint8, prompt)
-
-        # FID: update fake stats (real stats already populated)
-        all_fake = torch.cat(fake_imgs, dim=0)  # (N, 3, H, W) float32 [0,1]
-        self.fid.update(all_fake.to(self.device), real=False)
 
         fid_val = self.fid.compute().item()
         is_mean, is_std = self.isc.compute()

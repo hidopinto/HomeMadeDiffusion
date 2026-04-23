@@ -245,6 +245,8 @@ class DiTTrainer:
                         and self.eval_engine is not None
                     ):
                         self.accelerator.wait_for_everyone()
+                        gc.collect()
+                        torch.cuda.empty_cache()
                         unwrapped = self.accelerator.unwrap_model(self.model)
                         metrics = self.eval_engine.compute(unwrapped, global_step)
                         if metrics and self.accelerator.is_main_process:
