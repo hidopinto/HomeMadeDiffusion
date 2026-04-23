@@ -26,6 +26,9 @@ pytest tests/ -v -k "shape"
 # Run overfit smoke test
 pytest tests/test_overfit.py -v
 
+# Smoke-test all eval metrics before a training run
+python scripts/check_eval.py
+
 # Check GPU  (Skill)
 python /vram-check
 
@@ -45,6 +48,7 @@ Tests live in `tests/` and use a tiny config (hidden_size=128, depth=2, 16×16 l
 | `tests/test_flow_matching.py` | FlowMatching q_sample boundaries, interpolation, loss, OT reordering correctness |
 | `tests/test_latent_diffusion.py` | encode_text shapes, forward loss scalar, gradient presence |
 | `tests/test_overfit.py` | Gradient-flow smoke test: loss drops ≥5% in 10 steps for both 2D and 3D |
+| `tests/test_eval_metrics.py` | `_CLIPModelWrapper` isolation: tensor extraction, `.norm()` compat, device movement, passthrough |
 
 ## Hardware Constraints
 - **VRAM Limit**: 24GB. 
@@ -88,6 +92,7 @@ latents + timestep t + encoder_hidden_states
 | `models/layers.py` | `masked_mean_pool`, `PatchEmbed`, `FinalLayer`, `AdaLNZeroStrategy` |
 | `models/conditioning.py` | `TimestepEmbedder`, `SinCosPosEmbed2D`, `SinCosPosEmbed3D` |
 | `data/` | `LatentDataset`, `LatentCachingEngine`, `build_dataloader` — fully implemented |
+| `evaluation/metrics.py` | `EvaluationEngine` — FID / IS / CLIPScore every `eval_every_steps`; real FID stats cached to disk; `_CLIPModelWrapper` bridges transformers 5.x API |
 | `config.yaml` | All hyperparameters (model, training, external model IDs) |
 
 ### DiT Conditioning (Hybrid AdaLN + Cross-Attention)
@@ -112,6 +117,7 @@ latents + timestep t + encoder_hidden_states
 - `dit`: architecture hyperparameters (patch size, hidden size, depth, heads, etc.)
 - `training`: lr, epochs, mixed precision, gradient checkpointing
 - `general`: `is_video`, W&B project name
+- `evaluation`: `clip_model_name` — HuggingFace model ID used by `CLIPScore`
 
 ## Known TODOs / Incomplete Areas
 
