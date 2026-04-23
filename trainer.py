@@ -148,7 +148,7 @@ class DiTTrainer:
         )
 
         num_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        self.accelerator.log({"model/num_params": num_params})
+        self.accelerator.log({"model/num_params": num_params}, step=0)
 
         save_every_steps = getattr(self.config.training, "save_every_steps", False)
         infer_every_steps = getattr(self.config.training, "inference_every_steps", False)
@@ -194,11 +194,11 @@ class DiTTrainer:
                     loss_val = loss.item()
                     epoch_loss += loss_val
                     current_lr = self.optimizer.param_groups[0]["lr"]
-                    self.accelerator.log({
+                    log_dict: dict = {
                         "train/loss": loss_val,
                         "train/lr": current_lr,
                         **grad_log,
-                    }, step=global_step)
+                    }
 
                     if save_every_steps and global_step % save_every_steps == 0:
                         self.accelerator.wait_for_everyone()
@@ -230,14 +230,12 @@ class DiTTrainer:
                             eta=inference_eta,
                         )
                         img_tensor = images[0].detach().cpu().to(torch.float32)
-                        caption = f"Step {global_step}"
-
-                        self.accelerator.log({
-                            "inference/images": wandb.Image(img_tensor, caption=caption),
-                            "inference/step": global_step,
-                        }, step=global_step)
+                        log_dict["inference/images"] = wandb.Image(img_tensor, caption=f"Step {global_step}")
+                        log_dict["inference/step"] = global_step
                         unwrapped.transformer.train()
                         torch.cuda.empty_cache()
+
+                    self.accelerator.log(log_dict, step=global_step)
 
                     if (
                         eval_every_steps

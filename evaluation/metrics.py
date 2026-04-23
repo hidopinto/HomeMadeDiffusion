@@ -7,7 +7,6 @@ import torch
 from torch import Tensor
 from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
-from torchmetrics.image.inception import InceptionScore
 from torchmetrics.multimodal.clip_score import CLIPScore
 from transformers import CLIPModel, CLIPProcessor
 
@@ -56,13 +55,12 @@ def _fid_stats_path(config, max_real: int) -> Path:
 
 
 class EvaluationEngine:
-    """Computes FID, Inception Score, and CLIP Score at eval checkpoints.
+    """Computes FID and CLIP Score at eval checkpoints.
 
-    All three torchmetrics objects run on the training device. Real FID
-    statistics are pre-populated once at construction time (while the VAE is
-    still on GPU); a snapshot of those stats is kept so each ``compute()``
-    call only needs to generate fake images rather than re-decode the entire
-    val set.
+    Both torchmetrics objects run on the training device. Real FID statistics
+    are pre-populated once at construction time (while the VAE is still on GPU);
+    a snapshot of those stats is kept so each ``compute()`` call only needs to
+    generate fake images rather than re-decode the entire val set.
     """
 
     def __init__(
@@ -94,9 +92,8 @@ class EvaluationEngine:
             "openai/clip-vit-large-patch14",
         )
 
-        logger.info("Initialising evaluation metrics (FID + IS + CLIPScore)...")
+        logger.info("Initialising evaluation metrics (FID + CLIPScore)...")
         self.fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
-        self.isc = InceptionScore(normalize=True).to(device)
         self.clip_score = CLIPScore(model_name_or_path=clip_model_name).to(device)
         self.clip_score.model = _CLIPModelWrapper(self.clip_score.model)
         logger.info("  Metric models on device.")
@@ -109,6 +106,7 @@ class EvaluationEngine:
             self._real_sum = stats["real_sum"].to(device)
             self._real_cov_sum = stats["real_cov_sum"].to(device)
             self._real_num = stats["real_num"].to(device)
+            self._restore_real_stats()
             logger.info(
                 "  FID real stats loaded (%d images). Skipping val encoding.",
                 int(self._real_num.item()),
@@ -127,9 +125,8 @@ class EvaluationEngine:
             logger.info("  FID real stats saved to %s.", fid_stats_path)
 
         # Offload metric models to CPU — they are only needed during compute().
-        # Leaving them on GPU would pin ~1.1 GB of VRAM for the entire training run.
+        # Leaving them on GPU would pin ~0.8 GB of VRAM for the entire training run.
         self.fid = self.fid.cpu()
-        self.isc = self.isc.cpu()
         self.clip_score = self.clip_score.cpu()
         torch.cuda.empty_cache()
         logger.info("EvaluationEngine ready (metrics offloaded to CPU until first eval).")
@@ -137,9 +134,8 @@ class EvaluationEngine:
     def _populate_real_stats(self, val_dataloader: DataLoader, model, max_real: int) -> None:
         """Decode val latents and update FID real-image statistics.
 
-        ``self.isc`` and ``self.clip_score`` are unused during this method.
-        They are moved to CPU for the duration of the loop to free ~1.5 GB of
-        GPU VRAM, then restored to the training device before returning.
+        ``self.clip_score`` is unused during this method. It is moved to CPU
+        for the duration of the loop to free ~0.5 GB of GPU VRAM.
 
         When the underlying dataset exposes ``iter_latents(batch_size)``,
         that path is used instead of iterating the full DataLoader — this
@@ -151,8 +147,6 @@ class EvaluationEngine:
         count: int = 0
         logger.info("  Decoding up to %d real images for FID reference stats...", max_real)
 
-        # Offload metrics that are unused during real-stat population.
-        self.isc = self.isc.cpu()
         self.clip_score = self.clip_score.cpu()
         torch.cuda.empty_cache()
 
@@ -184,8 +178,6 @@ class EvaluationEngine:
 
         logger.info("  FID real stats populated (%d images).", count)
 
-        # Restore metrics to GPU for compute() calls.
-        self.isc = self.isc.to(self.device)
         self.clip_score = self.clip_score.to(self.device)
 
         # Snapshot real stats so we can restore them after each reset()
@@ -200,7 +192,7 @@ class EvaluationEngine:
 
     @torch.no_grad()
     def compute(self, model, global_step: int) -> dict[str, float]:
-        """Generate ``eval_num_samples`` images, compute FID / IS / CLIP Score.
+        """Generate ``eval_num_samples`` images, compute FID / CLIP Score.
 
         Args:
             model: Unwrapped ``LatentDiffusion`` instance.
@@ -210,9 +202,8 @@ class EvaluationEngine:
             Dict of metric names → scalar values, or empty dict if not enough
             samples for reliable FID.
         """
-        logger.info("Running eval (FID / IS / CLIPScore)...")
+        logger.info("Running eval (FID / CLIPScore)...")
         self.fid = self.fid.to(self.device)
-        self.isc = self.isc.to(self.device)
         self.clip_score = self.clip_score.to(self.device)
 
         if self.eval_num_samples < _MIN_FID_SAMPLES:
@@ -221,15 +212,12 @@ class EvaluationEngine:
                 self.eval_num_samples, _MIN_FID_SAMPLES,
             )
             self.fid = self.fid.cpu()
-            self.isc = self.isc.cpu()
             self.clip_score = self.clip_score.cpu()
             torch.cuda.empty_cache()
             return {}
 
         model.transformer.eval()
 
-        fake_imgs: list[Tensor] = []
-        batch_prompts: list[str] = []
         generated = 0
         prompt_cycle = 0
 
@@ -252,48 +240,34 @@ class EvaluationEngine:
                 eta=self.eta,
             )  # (bs, 3, H, W) float32 in [0, 1]
 
-            imgs_cpu = imgs.float().cpu()
-            fake_imgs.append(imgs_cpu)
-            batch_prompts.extend(prompts_batch)
+            self.fid.update(imgs, real=False)
+            imgs_uint8 = (imgs * 255).clamp(0, 255).to(torch.uint8)
+            self.clip_score.update(imgs_uint8, prompts_batch)
+            del imgs, imgs_uint8
             generated += bs
             torch.cuda.empty_cache()
 
         model.transformer.train()
 
-        # Update FID / IS / CLIPScore incrementally — no monolithic GPU transfer
-        for img_batch, prompt in zip(
-            fake_imgs, _iter_batches(batch_prompts, self.eval_batch_size)
-        ):
-            imgs_gpu = img_batch.to(self.device)
-            self.fid.update(imgs_gpu, real=False)
-            self.isc.update(imgs_gpu)
-            imgs_uint8 = (imgs_gpu * 255).clamp(0, 255).to(torch.uint8)
-            self.clip_score.update(imgs_uint8, prompt)
-
         fid_val = self.fid.compute().item()
-        is_mean, is_std = self.isc.compute()
         clip_val = self.clip_score.compute().item()
 
         # Reset and restore real stats for next eval call
         self.fid.reset()
         self._restore_real_stats()
-        self.isc.reset()
         self.clip_score.reset()
 
         # Offload back to CPU — metric models are not needed until the next eval pass.
         self.fid = self.fid.cpu()
-        self.isc = self.isc.cpu()
         self.clip_score = self.clip_score.cpu()
         torch.cuda.empty_cache()
 
         logger.info(
-            "Eval done — FID=%.2f, IS=%.2f±%.2f, CLIP=%.3f.",
-            fid_val, is_mean.item(), is_std.item(), clip_val,
+            "Eval done — FID=%.2f, CLIP=%.3f.",
+            fid_val, clip_val,
         )
         return {
             "eval/fid": fid_val,
-            "eval/is_mean": is_mean.item(),
-            "eval/is_std": is_std.item(),
             "eval/clip_score": clip_val,
         }
 

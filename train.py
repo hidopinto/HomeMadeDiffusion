@@ -5,7 +5,6 @@ from functools import partial
 
 import huggingface_hub
 import torch
-import weave
 import wandb
 from dotenv import load_dotenv
 from torch.optim import AdamW
@@ -73,7 +72,6 @@ def main() -> None:
 
     config = load_config(config_path="config.yaml")
 
-    weave.init(config.general.wnb_project_name)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 1. Build model (frozen giants + DiT + diffusion engine)

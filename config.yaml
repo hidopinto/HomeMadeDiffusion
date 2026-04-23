@@ -41,7 +41,6 @@ dit:
   cross_attention: True
 
 training:
-  # epochs: 500
   epochs: 3   # 3 × 57,128 = 171K total steps; same ~33M sample exposure as original 250K×128 plan
   lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
@@ -51,7 +50,7 @@ training:
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
   use_reentrant: False
-  batch_size: 192            # 1.5x from 128; estimated ~21 GB peak on 3090 Ti (fall back to 160 if OOM)
+  batch_size: 300            # 1.5x from 128; estimated ~21 GB peak on 3090 Ti (fall back to 160 if OOM)
   gradient_accumulation_steps: 1
   gradient_clip_norm: 1.0
   grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
@@ -60,8 +59,8 @@ training:
   eval_every_steps: 20000   # Run FID/IS/CLIP eval every N optimizer steps
 #  eval_every_steps: False   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
-  eval_batch_size: 64      # Generation batch size during eval; no gradients → safe on 3090 Ti (was 32)
-  eval_num_steps: 20       # Diffusion steps for eval-time generation (separate from training inference_every_steps)
+  eval_batch_size: 128      # Controls both generation and inline metric updates; 128 fits with FID+CLIP+training model on 24 GB
+  eval_num_steps: 10       # FM quality sufficient at 10 steps for a training signal
   eval_prompts_file: "eval_prompts.txt"
   resume_from_checkpoint: False  # set to "checkpoints/full_ckpt" to resume training
   inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled
