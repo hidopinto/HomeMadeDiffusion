@@ -226,3 +226,6 @@ wandb
 
 # Model outputs
 *outputs/
+
+# General docs
+docs
