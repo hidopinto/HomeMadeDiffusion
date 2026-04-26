@@ -29,13 +29,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run DiT text-to-image inference")
     parser.add_argument("--checkpoint", required=True, help="Path to DiT state_dict .pt file")
     parser.add_argument("--prompt", required=True, nargs="+", help="Text prompt(s)")
-    parser.add_argument("--height", type=int, default=256)
-    parser.add_argument("--width", type=int, default=256)
+    parser.add_argument("--height", type=int, default=512)
+    parser.add_argument("--width", type=int, default=512)
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance", type=float, default=7.5)
-    parser.add_argument("--scheduler", default="ddim", choices=["ddim", "ddpm"])
+    parser.add_argument("--scheduler", default="flow_matching", choices=["ddim", "ddpm", "flow_matching"])
     parser.add_argument("--eta", type=float, default=0.0,
                         help="Stochasticity: 0=DDIM deterministic, 1=full DDPM noise")
+    parser.add_argument("--device", default=None,
+                        help="Force device: 'cpu' or 'cuda'. Auto-detects if not set.")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--out_dir", default=_default_out_dir)
     parser.add_argument("--format", choices=["png", "jpg"], default="png")
@@ -45,7 +47,7 @@ def main() -> None:
     parser.add_argument("--wandb_project", default="Home-Made-Diffusion")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     config = load_config(args.config)
     model = build_model(config, device, gradient_checkpointing=False)
 

@@ -172,6 +172,7 @@ def main() -> None:
         config=config, model=model, dataloader=dataloader,
         optimizer=optimizer, lr_scheduler=lr_scheduler,
         eval_engine=eval_engine,
+        max_steps=total_training_steps,
     )
     logger.info("Trainer ready. Starting training.")
     trainer.fit(epochs=config.training.epochs)

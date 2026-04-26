@@ -5,10 +5,13 @@ import logging
 import os
 import time
 from pathlib import Path
+from typing import cast
 
 import torch
 import wandb
 from accelerate import Accelerator
+
+from models.models import LatentDiffusion
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +37,18 @@ def _log_top_tensors(tag: str, top_n: int = 30) -> None:
 
 
 class DiTTrainer:
-    def __init__(self, config, model, dataloader, optimizer, lr_scheduler, eval_engine=None) -> None:
+    def __init__(
+        self,
+        config,
+        model,
+        dataloader,
+        optimizer,
+        lr_scheduler,
+        eval_engine=None,
+        max_steps: int | None = None,
+    ) -> None:
         self.config = config
+        self._max_steps = max_steps
 
         self.accelerator = Accelerator(
             mixed_precision=config.training.mixed_precision,
@@ -60,6 +73,68 @@ class DiTTrainer:
             self.model, self.optimizer, self.dataloader, self.lr_scheduler
         )
         logger.info("accelerator.prepare done.")
+
+        # EMA — initialized from live weights after prepare(); 0.0 disables.
+        self._ema_decay: float = getattr(config.training, "ema_decay", 0.0)
+        self._ema_transformer: dict[str, torch.Tensor] = {}
+        self._ema_cmanager: dict[str, torch.Tensor] = {}
+        if self._ema_decay > 0:
+            unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
+            self._ema_transformer = {
+                k: v.detach().clone().float().cpu()
+                for k, v in unwrapped.transformer.state_dict().items()
+            }
+            self._ema_cmanager = {
+                k: v.detach().clone().float().cpu()
+                for k, v in unwrapped.condition_manager.state_dict().items()
+            }
+            logger.info("EMA initialized (decay=%.4f).", self._ema_decay)
+
+    def _ema_update(self) -> None:
+        unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
+        with torch.no_grad():
+            for k in self._ema_transformer:
+                live = unwrapped.transformer.state_dict()[k].detach()
+                if live.dtype.is_floating_point:
+                    self._ema_transformer[k].mul_(self._ema_decay).add_(
+                        live.float().cpu(), alpha=1.0 - self._ema_decay
+                    )
+                else:
+                    self._ema_transformer[k].copy_(live.cpu())
+            for k in self._ema_cmanager:
+                live = unwrapped.condition_manager.state_dict()[k].detach()
+                if live.dtype.is_floating_point:
+                    self._ema_cmanager[k].mul_(self._ema_decay).add_(
+                        live.float().cpu(), alpha=1.0 - self._ema_decay
+                    )
+                else:
+                    self._ema_cmanager[k].copy_(live.cpu())
+
+    def _ema_save(self, checkpoint_dir: str, full_ckpt_dir: Path, global_step: int) -> None:
+        if not (self._ema_decay > 0 and self.accelerator.is_main_process):
+            return
+        payload = {"transformer": self._ema_transformer, "cmanager": self._ema_cmanager}
+        torch.save(payload, str(full_ckpt_dir / "ema.pt"))
+        torch.save(self._ema_transformer, str(Path(checkpoint_dir) / f"ema_step{global_step:07d}.pt"))
+
+    def _ema_load(self, full_ckpt_dir: Path) -> None:
+        ema_path = full_ckpt_dir / "ema.pt"
+        if not (self._ema_decay > 0 and ema_path.exists()):
+            return
+        saved = torch.load(str(ema_path), map_location="cpu", weights_only=True)
+        self._ema_transformer = saved["transformer"]
+        self._ema_cmanager = saved["cmanager"]
+        logger.info("EMA state loaded from %s.", ema_path)
+
+    def _save_checkpoint(self, checkpoint_dir: str, full_ckpt_dir: Path, global_step: int) -> None:
+        self.accelerator.wait_for_everyone()
+        unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
+        path = Path(checkpoint_dir) / f"dit_step{global_step:07d}.pt"
+        self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
+        self.accelerator.save_state(str(full_ckpt_dir))
+        if self.accelerator.is_main_process:
+            (full_ckpt_dir / "step.txt").write_text(str(global_step))
+        self._ema_save(checkpoint_dir, full_ckpt_dir, global_step)
 
     def train_step(self, batch: dict, global_step: int, _diag: bool = False) -> tuple[torch.Tensor, dict]:
         latents = batch["latent"]
@@ -88,7 +163,7 @@ class DiTTrainer:
 
                 grad_norm_interval = getattr(self.config.training, "grad_norm_log_every_steps", 100)
                 if global_step % grad_norm_interval == 0:
-                    unwrapped = self.accelerator.unwrap_model(self.model)
+                    unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
                     transformer = unwrapped.transformer
 
                     # Collect all norm tensors first, then batch-convert to float with a
@@ -163,11 +238,15 @@ class DiTTrainer:
             step_file = Path(resume_from) / "step.txt"
             if step_file.exists():
                 global_step = int(step_file.read_text().strip())
+            self._ema_load(Path(resume_from))
             self.accelerator.print(f"Resumed training from step {global_step}")
 
         _first_step_logged = False
         _diag_done = False
+        _done = False
         for epoch in range(epochs):
+            if _done:
+                break
             self.model.train()
             epoch_loss = 0.0
             epoch_steps = 0
@@ -189,6 +268,10 @@ class DiTTrainer:
 
                 if self.accelerator.sync_gradients:
                     global_step += 1
+
+                    if self._ema_decay > 0:
+                        self._ema_update()
+
                     # Defer .item() to here so we only sync GPU→CPU when we actually
                     # need the scalar for logging, not on every micro-step.
                     loss_val = loss.item()
@@ -201,17 +284,10 @@ class DiTTrainer:
                     }
 
                     if save_every_steps and global_step % save_every_steps == 0:
-                        self.accelerator.wait_for_everyone()
-                        unwrapped = self.accelerator.unwrap_model(self.model)
-                        path = Path(checkpoint_dir) / f"dit_step{global_step:07d}.pt"
-                        self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
-                        self.accelerator.save_state(str(full_ckpt_dir))
-                        if self.accelerator.is_main_process:
-                            (full_ckpt_dir / "step.txt").write_text(str(global_step))
+                        self._save_checkpoint(checkpoint_dir, full_ckpt_dir, global_step)
 
                     if infer_every_steps and global_step % infer_every_steps == 0:
-                        unwrapped = self.accelerator.unwrap_model(self.model)
-                        unwrapped.transformer.eval()
+                        unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
                         inference_prompt    = getattr(self.config.training, "inference_prompt")
                         sampler_cfg         = self.config.diffusion.samplers[self.config.diffusion.sampler]
                         inference_steps     = getattr(sampler_cfg, "num_steps", 50)
@@ -220,6 +296,22 @@ class DiTTrainer:
                         inference_height    = getattr(self.config.training, "inference_height", 512)
                         inference_width     = getattr(self.config.training, "inference_width", 512)
                         inference_scheduler = getattr(self.config.diffusion, "sampler", "ddim")
+
+                        # Swap in EMA weights for inference if enabled
+                        live_xfm_sd: dict | None = None
+                        live_cm_sd: dict | None = None
+                        if self._ema_decay > 0:
+                            _dtype = next(unwrapped.transformer.parameters()).dtype
+                            live_xfm_sd = {k: v.clone() for k, v in unwrapped.transformer.state_dict().items()}
+                            live_cm_sd = {k: v.clone() for k, v in unwrapped.condition_manager.state_dict().items()}
+                            unwrapped.transformer.load_state_dict(
+                                {k: v.to(_dtype) for k, v in self._ema_transformer.items()}
+                            )
+                            unwrapped.condition_manager.load_state_dict(
+                                {k: v.to(_dtype) for k, v in self._ema_cmanager.items()}
+                            )
+
+                        unwrapped.transformer.eval()
                         images = unwrapped.generate(
                             [inference_prompt],
                             height=inference_height,
@@ -230,8 +322,15 @@ class DiTTrainer:
                             eta=inference_eta,
                         )
                         img_tensor = images[0].detach().cpu().to(torch.float32)
-                        log_dict["inference/images"] = wandb.Image(img_tensor, caption=f"Step {global_step}")
+                        log_dict["inference/images"] = wandb.Image(img_tensor, caption=f"Step {global_step}: {inference_prompt}")
                         log_dict["inference/step"] = global_step
+
+                        # Restore live weights after EMA inference
+                        if live_xfm_sd is not None:
+                            unwrapped.transformer.load_state_dict(live_xfm_sd)
+                        if live_cm_sd is not None:
+                            unwrapped.condition_manager.load_state_dict(live_cm_sd)
+
                         unwrapped.transformer.train()
                         torch.cuda.empty_cache()
 
@@ -245,11 +344,16 @@ class DiTTrainer:
                         self.accelerator.wait_for_everyone()
                         gc.collect()
                         torch.cuda.empty_cache()
-                        unwrapped = self.accelerator.unwrap_model(self.model)
+                        unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
                         metrics = self.eval_engine.compute(unwrapped, global_step)
                         if metrics and self.accelerator.is_main_process:
                             self.accelerator.log(metrics, step=global_step)
                         torch.cuda.empty_cache()
+
+                    if self._max_steps is not None and global_step >= self._max_steps:
+                        logger.info("Reached max_steps=%d — stopping.", self._max_steps)
+                        _done = True
+                        break
 
             elapsed = time.time() - t_start
             samples_per_sec = (epoch_steps * self.config.training.batch_size) / elapsed if elapsed > 0 else 0.0
@@ -261,4 +365,6 @@ class DiTTrainer:
                 "train/samples_per_sec": samples_per_sec,
             }, step=global_step)
 
+        # Always save final state so the last steps are never lost.
+        self._save_checkpoint(checkpoint_dir, full_ckpt_dir, global_step)
         self.accelerator.end_training()

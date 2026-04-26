@@ -70,6 +70,7 @@ training:
   inference_width: 512     # must match data.image_size
   guidance_scale: 6.5      # CFG scale used during in-training inference (6.5 safer with 20% CFG dropout)
   cfg_dropout_prob: 0.2   # Fraction of samples trained without text conditioning (for CFG)
+  ema_decay: 0.9999       # EMA decay for shadow weights used at inference time; 0.0 = disabled
 
 general:
   is_video: False           # Explicitly set for conditional logic
