@@ -7,7 +7,7 @@ from box import Box
 from torch import Tensor
 
 from diffusion.methods.flow_matching import FlowMatching
-from diffusion.samplers.base import IntermediateCollector
+from diffusion.samplers.base import IntermediateCollector, ProgressFn
 
 __all__ = ["FlowMatchingSampler"]
 
@@ -55,6 +55,7 @@ class FlowMatchingSampler:
         device: torch.device,
         model_kwargs: dict | None = None,
         collector: IntermediateCollector | None = None,
+        progress_fn: ProgressFn | None = None,
     ) -> Tensor:
         x = torch.randn(shape, device=device)
         dt = 1.0 / self.num_steps
@@ -65,4 +66,6 @@ class FlowMatchingSampler:
             x = self._step(model_fn, x, int(t_idx), dt, model_kwargs=model_kwargs)
             if collector is not None:
                 collector.maybe_collect(i, self.num_steps, x)
+            if progress_fn is not None:
+                progress_fn(i, self.num_steps)
         return x

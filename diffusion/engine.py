@@ -40,6 +40,10 @@ class DiffusionEngine(nn.Module):
         kwargs.pop("scheduler", None)  # sampler is chosen at build time
         model_kwargs = kwargs.pop("model_kwargs", None)
         collector = kwargs.pop("collector", None)
+        progress_fn = kwargs.pop("progress_fn", None)
         # remaining kwargs are sampler settings — sampler decides what applies via hasattr
         self.sampler.update_settings(**kwargs)
-        return self.sampler.sample_loop(model_fn, shape, device, model_kwargs=model_kwargs, collector=collector)
+        return self.sampler.sample_loop(
+            model_fn, shape, device,
+            model_kwargs=model_kwargs, collector=collector, progress_fn=progress_fn,
+        )

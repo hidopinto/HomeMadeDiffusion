@@ -18,6 +18,12 @@ def _every_n_steps(freq: int, step_idx: int, total_steps: int, x: torch.Tensor) 
     return step_idx % freq == 0
 
 
+def _print_step(step: int, total: int) -> None:
+    print(f"\rDenoising step {step + 1}/{total}", end="", flush=True)
+    if step + 1 == total:
+        print()
+
+
 def main() -> None:
     # Pre-parse --config so we can use config.inference.out_dir as the default for --out_dir
     _pre = argparse.ArgumentParser(add_help=False)
@@ -43,6 +49,8 @@ def main() -> None:
     parser.add_argument("--format", choices=["png", "jpg"], default="png")
     parser.add_argument("--save_intermediates", action="store_true")
     parser.add_argument("--intermediate_freq", type=int, default=10)
+    parser.add_argument("--verbose", action="store_true",
+                        help="Print denoising step progress to stdout")
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", default="Home-Made-Diffusion")
     args = parser.parse_args()
@@ -60,6 +68,8 @@ def main() -> None:
         capture_fn = partial(_every_n_steps, args.intermediate_freq)
         collector = IntermediateCollector(capture_fn=capture_fn)
 
+    print('Calculating images')
+    progress_fn = _print_step if args.verbose else None
     images = model.generate(
         args.prompt,
         height=args.height,
@@ -69,15 +79,18 @@ def main() -> None:
         scheduler=args.scheduler,
         eta=args.eta,
         collector=collector,
+        progress_fn=progress_fn,
     )
 
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     for i, img_tensor in enumerate(images):
+        print(f"Saving image {i}/{len(images)}")
         out_path = Path(args.out_dir) / f"sample_{i:04d}.{args.format}"
         to_pil_image(img_tensor.cpu().float()).save(out_path)
         print(f"Saved {out_path}")
 
     if collector is not None and collector.decoded_images:
+        print(f"Saving intermediates")
         inter_dir = Path(args.out_dir) / "intermediates"
         inter_dir.mkdir(parents=True, exist_ok=True)
         for step_idx, img_batch in zip(collector.step_indices, collector.decoded_images):
@@ -86,6 +99,7 @@ def main() -> None:
                 to_pil_image(img_tensor.cpu().float()).save(out_path)
 
     if args.wandb:
+        print(f"Saving to wandb")
         import wandb
         wandb.init(project=args.wandb_project, config=vars(args))
         log_dict = {}

@@ -7,7 +7,7 @@ from box import Box
 from torch import Tensor
 
 from diffusion.methods.ddpm import DDPM
-from diffusion.samplers.base import IntermediateCollector
+from diffusion.samplers.base import IntermediateCollector, ProgressFn
 
 __all__ = ["DDPMSampler"]
 
@@ -55,10 +55,13 @@ class DDPMSampler:
         device: torch.device,
         model_kwargs: dict | None = None,
         collector: IntermediateCollector | None = None,
+        progress_fn: ProgressFn | None = None,
     ) -> Tensor:
         x = torch.randn(shape, device=device)
-        for t_idx in reversed(range(self.schedule.num_timesteps)):
+        for i, t_idx in enumerate(reversed(range(self.schedule.num_timesteps))):
             x = self._step(model_fn, x, t_idx, model_kwargs=model_kwargs)
             if collector is not None:
                 collector.maybe_collect(t_idx, self.schedule.num_timesteps, x)
+            if progress_fn is not None:
+                progress_fn(i, self.schedule.num_timesteps)
         return x

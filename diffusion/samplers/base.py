@@ -6,7 +6,9 @@ from typing import Any, Callable, Protocol, runtime_checkable
 import torch
 from torch import Tensor
 
-__all__ = ["IntermediateCollector", "SamplerProtocol"]
+__all__ = ["IntermediateCollector", "ProgressFn", "SamplerProtocol"]
+
+ProgressFn = Callable[[int, int], None]
 
 
 @dataclass
@@ -46,4 +48,5 @@ class SamplerProtocol(Protocol):
         device: torch.device,
         model_kwargs: dict | None,
         collector: "IntermediateCollector | None",
+        progress_fn: "ProgressFn | None",
     ) -> Tensor: ...

@@ -329,6 +329,7 @@ class LatentDiffusion(nn.Module):
         scheduler: str = "ddim",
         eta: float = 0.0,
         collector: "IntermediateCollector | None" = None,
+        progress_fn: "ProgressFn | None" = None,
     ) -> Tensor:
         device = next(self.transformer.parameters()).device
         cond_proj = self._project(self.encode_text(prompts, device))
@@ -347,6 +348,7 @@ class LatentDiffusion(nn.Module):
             num_steps=num_steps, scheduler=scheduler, eta=eta,
             model_kwargs=model_kwargs,
             collector=collector,
+            progress_fn=progress_fn,
         )
 
         if collector is not None:
