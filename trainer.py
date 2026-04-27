@@ -168,6 +168,15 @@ class DiTTrainer:
         return loss, grad_log
 
     def fit(self, epochs: int) -> None:
+        # Validate before starting any external services so we fail fast.
+        _resume_cfg = getattr(self.config.training, "resume_from_checkpoint", False)
+        resume_from: str | None = _resume_cfg if isinstance(_resume_cfg, str) else None
+        if resume_from and not Path(resume_from).exists():
+            raise FileNotFoundError(
+                f"resume_from_checkpoint='{resume_from}' does not exist. "
+                "Fix the path or set resume_from_checkpoint: False to start fresh."
+            )
+
         self.accelerator.init_trackers(
             self.config.general.wnb_project_name,
             init_kwargs={"wandb": {"entity": self.config.general.wnb_entity}},
@@ -183,8 +192,7 @@ class DiTTrainer:
         full_ckpt_dir = Path(checkpoint_dir) / "full_ckpt"
 
         global_step = 0
-        resume_from = getattr(self.config.training, "resume_from_checkpoint", False)
-        if resume_from and Path(resume_from).exists():
+        if resume_from:
             self.accelerator.load_state(resume_from)
             step_file = Path(resume_from) / "step.txt"
             if step_file.exists():
