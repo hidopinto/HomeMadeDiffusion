@@ -69,7 +69,8 @@ def load_frozen_models(config: Box, device: str) -> tuple[AutoencoderKL, CLIPTex
     return vae_on_device, text_encoder_on_device, tokenizer
 
 
-def build_model(config: Box, device: str, gradient_checkpointing: bool = False) -> LatentDiffusion:
+def build_model(config: Box, device: str, gradient_checkpointing: bool = False,
+                compile_blocks: bool = True) -> LatentDiffusion:
     vae, text_encoder, tokenizer = load_frozen_models(config, device)
 
     method  = METHOD_REGISTRY[config.diffusion.method].from_config(config)
@@ -122,7 +123,7 @@ def build_model(config: Box, device: str, gradient_checkpointing: bool = False) 
         cross_attn_class=CrossAttention if use_cross_attn else None,
         gradient_checkpointing=gradient_checkpointing,
         use_reentrant=config.training.use_reentrant,
-        compile_blocks=torch.cuda.is_available(),
+        compile_blocks=compile_blocks and torch.cuda.is_available(),
     )
     num_params = sum(p.numel() for p in model_core.parameters())
     logger.info("DiT built: %.2fM trainable parameters.", num_params / 1e6)

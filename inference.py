@@ -46,8 +46,6 @@ def main() -> None:
                         help="Force device: 'cpu' or 'cuda'. Auto-detects if not set.")
     parser.add_argument("--vae_device", default=None,
                         help="Device for VAE decode (e.g. 'cuda'). Defaults to --device.")
-    parser.add_argument("--cmanager_checkpoint", default=None,
-                        help="Legacy: path to a .pt with 'cmanager' key (e.g. full_ckpt/ema.pt)")
     parser.add_argument("--full_checkpoint_dir", default=None,
                         help="Accelerator checkpoint dir with model.safetensors; loads both transformer and condition_manager")
     parser.add_argument("--config", default="config.yaml")
@@ -66,7 +64,7 @@ def main() -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     config = load_config(args.config)
-    model = build_model(config, device, gradient_checkpointing=False)
+    model = build_model(config, device, gradient_checkpointing=False, compile_blocks=False)
 
     if args.checkpoint is not None:
         state_dict = torch.load(args.checkpoint, map_location=device, weights_only=True)
@@ -75,10 +73,6 @@ def main() -> None:
             model.condition_manager.load_state_dict(state_dict["condition_manager"])
         else:
             model.transformer.load_state_dict(state_dict)
-
-    if args.cmanager_checkpoint is not None:
-        cm = torch.load(args.cmanager_checkpoint, map_location=device, weights_only=True)
-        model.condition_manager.load_state_dict(cm["cmanager"])
 
     if args.full_checkpoint_dir is not None:
         from safetensors.torch import load_file
