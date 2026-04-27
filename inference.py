@@ -44,6 +44,8 @@ def main() -> None:
                         help="Stochasticity: 0=DDIM deterministic, 1=full DDPM noise")
     parser.add_argument("--device", default=None,
                         help="Force device: 'cpu' or 'cuda'. Auto-detects if not set.")
+    parser.add_argument("--vae_device", default=None,
+                        help="Device for VAE decode (e.g. 'cuda'). Defaults to --device.")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--out_dir", default=_default_out_dir)
     parser.add_argument("--format", choices=["png", "jpg"], default="png")
@@ -80,11 +82,12 @@ def main() -> None:
         eta=args.eta,
         collector=collector,
         progress_fn=progress_fn,
+        vae_device=args.vae_device,
     )
 
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
     for i, img_tensor in enumerate(images):
-        print(f"Saving image {i}/{len(images)}")
+        print(f"Saving image {i+1}/{len(images)}")
         out_path = Path(args.out_dir) / f"sample_{i:04d}.{args.format}"
         to_pil_image(img_tensor.cpu().float()).save(out_path)
         print(f"Saved {out_path}")

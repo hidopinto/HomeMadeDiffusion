@@ -313,8 +313,12 @@ class LatentDiffusion(nn.Module):
             eps_c, _ = torch.split(eps_c, in_c, dim=1)
         return eps_u + guidance_scale * (eps_c - eps_u)
 
-    def _decode_latents(self, latents: Tensor) -> Tensor:
+    def _decode_latents(self, latents: Tensor, vae_device: str | None = None) -> Tensor:
         scaled = latents / self.config.dit.vae_scale_factor
+        if vae_device:
+            self.vae.to(vae_device)
+            images = self.vae.decode(scaled.to(device=vae_device, dtype=self.vae.dtype)).sample
+            return (images.to(latents.device).clamp(-1.0, 1.0) + 1.0) / 2.0
         images = self.vae.decode(scaled.to(self.vae.dtype)).sample
         return (images.clamp(-1.0, 1.0) + 1.0) / 2.0
 
@@ -330,6 +334,7 @@ class LatentDiffusion(nn.Module):
         eta: float = 0.0,
         collector: "IntermediateCollector | None" = None,
         progress_fn: "ProgressFn | None" = None,
+        vae_device: str | None = None,
     ) -> Tensor:
         device = next(self.transformer.parameters()).device
         cond_proj = self._project(self.encode_text(prompts, device))
@@ -352,5 +357,5 @@ class LatentDiffusion(nn.Module):
         )
 
         if collector is not None:
-            collector.decoded_images = [self._decode_latents(lat) for lat in collector.latents]
-        return self._decode_latents(latents)
+            collector.decoded_images = [self._decode_latents(lat, vae_device) for lat in collector.latents]
+        return self._decode_latents(latents, vae_device)
