@@ -115,7 +115,10 @@ class DiTTrainer:
             return
         payload = {"transformer": self._ema_transformer, "cmanager": self._ema_cmanager}
         torch.save(payload, str(full_ckpt_dir / "ema.pt"))
-        torch.save(self._ema_transformer, str(Path(checkpoint_dir) / f"ema_step{global_step:07d}.pt"))
+        torch.save(
+            {"transformer": self._ema_transformer, "cmanager": self._ema_cmanager},
+            str(Path(checkpoint_dir) / f"ema_step{global_step:07d}.pt"),
+        )
 
     def _ema_load(self, full_ckpt_dir: Path) -> None:
         ema_path = full_ckpt_dir / "ema.pt"
@@ -130,7 +133,11 @@ class DiTTrainer:
         self.accelerator.wait_for_everyone()
         unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
         path = Path(checkpoint_dir) / f"dit_step{global_step:07d}.pt"
-        self.accelerator.save(unwrapped.transformer.state_dict(), str(path))
+        payload = {
+            "transformer": unwrapped.transformer.state_dict(),
+            "condition_manager": unwrapped.condition_manager.state_dict(),
+        }
+        self.accelerator.save(payload, str(path))
         self.accelerator.save_state(str(full_ckpt_dir))
         if self.accelerator.is_main_process:
             (full_ckpt_dir / "step.txt").write_text(str(global_step))
