@@ -69,10 +69,13 @@ def main() -> None:
     if args.checkpoint is not None:
         state_dict = torch.load(args.checkpoint, map_location=device, weights_only=True)
         if isinstance(state_dict, dict) and "transformer" in state_dict:
-            model.transformer.load_state_dict(state_dict["transformer"])
-            model.condition_manager.load_state_dict(state_dict["condition_manager"])
+            xfm_sd = {k.replace("._orig_mod", ""): v for k, v in state_dict["transformer"].items()}
+            cm_sd  = {k.replace("._orig_mod", ""): v for k, v in state_dict["condition_manager"].items()}
+            model.transformer.load_state_dict(xfm_sd)
+            model.condition_manager.load_state_dict(cm_sd)
         else:
-            model.transformer.load_state_dict(state_dict)
+            xfm_sd = {k.replace("._orig_mod", ""): v for k, v in state_dict.items()}
+            model.transformer.load_state_dict(xfm_sd)
 
     if args.full_checkpoint_dir is not None:
         from safetensors.torch import load_file
