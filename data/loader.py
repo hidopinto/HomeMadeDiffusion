@@ -57,12 +57,15 @@ def _build_cached_dataloader(
     cache_root = Path(config.data.cache_dir)
     dataset_name = config.data.dataset_name
     split = split if split is not None else config.data.split
-    cache_dir = cache_root / dataset_name.replace("/", "--") / split
+    # Percent-slice notation (e.g. "train[99%:]") is not valid as a directory name.
+    # Strip it for cache path and manifest matching; LatentDataset serves the full split.
+    split_key = split.split("[")[0] if "[" in split else split
+    cache_dir = cache_root / dataset_name.replace("/", "--") / split_key
     manifest_path = cache_dir / "manifest.json"
 
     expected = CacheManifest(
         dataset_name=dataset_name,
-        split=split,
+        split=split_key,
         image_size=config.data.image_size,
         vae_model_id=config.external_models.vae,
         encoder_keys=["text_embed"],
@@ -122,7 +125,7 @@ def _build_cached_dataloader(
         )
         engine.run(raw_dataset, cache_root, split=split)
 
-    dataset = LatentDataset(cache_root, dataset_name, split)
+    dataset = LatentDataset(cache_root, dataset_name, split_key)
     num_workers = config.data.num_workers
     return DataLoader(
         dataset,

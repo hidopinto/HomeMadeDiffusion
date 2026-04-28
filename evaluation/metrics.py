@@ -45,9 +45,10 @@ class _CLIPModelWrapper(torch.nn.Module):
 
 def _fid_stats_path(config, max_real: int) -> Path:
     """Return the path where FID real-image stats are cached for this config."""
+    eval_ds = getattr(config.data, "eval_dataset_name", None) or config.data.dataset_name
     cache_dir = (
         Path(config.data.vae_cache_dir)
-        / config.data.dataset_name.replace("/", "--")
+        / eval_ds.replace("/", "--")
         / "train"
     )
     cache_dir.mkdir(parents=True, exist_ok=True)

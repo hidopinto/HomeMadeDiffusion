@@ -90,6 +90,7 @@ data:
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
   filtered_indices_file: null  # set to prepare_cc12m.py output for Phase 2 filtered CC12M training
+  eval_dataset_name: "pixparse/cc12m-wds"  # dataset for FID real-image stats (CC12M forgetting monitor)
   encoding_batch_size: 900  # CLIP-only at train time (~0.5 MB/sample); serves ~3 training batches per call. Lower to 45 if re-caching VAE.
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)

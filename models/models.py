@@ -330,7 +330,7 @@ class LatentDiffusion(nn.Module):
         width: int = 512,
         num_steps: int = 50,
         guidance_scale: float = 7.5,
-        scheduler: str = "ddim",
+        scheduler: str = "flow_matching",
         eta: float = 0.0,
         collector: "IntermediateCollector | None" = None,
         progress_fn: "ProgressFn | None" = None,
