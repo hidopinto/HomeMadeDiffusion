@@ -9,6 +9,7 @@ from typing import cast
 
 import torch
 import wandb
+from safetensors.torch import load_file as _load_safetensors
 from accelerate import Accelerator
 
 from models.models import LatentDiffusion
@@ -192,12 +193,29 @@ class DiTTrainer:
         full_ckpt_dir = Path(checkpoint_dir) / "full_ckpt"
 
         global_step = 0
+        resume_weights_only = getattr(self.config.training, "resume_weights_only", False)
         if resume_from:
-            self.accelerator.load_state(resume_from)
-            step_file = Path(resume_from) / "step.txt"
-            if step_file.exists():
-                global_step = int(step_file.read_text().strip())
-            self.accelerator.print(f"Resumed training from step {global_step}")
+            if resume_weights_only:
+                # Warm-restart fine-tune: load only trainable weights; leave optimizer,
+                # scheduler, and step counter at their freshly-initialised values.
+                unwrapped = self.accelerator.unwrap_model(self.model)
+                if resume_from.endswith(".safetensors"):
+                    sd = _load_safetensors(resume_from, device="cpu")
+                    transformer_sd = {k[len("transformer."):]: v for k, v in sd.items() if k.startswith("transformer.")}
+                    cm_sd = {k[len("condition_manager."):]: v for k, v in sd.items() if k.startswith("condition_manager.")}
+                else:
+                    ckpt = torch.load(resume_from, map_location="cpu", weights_only=True)
+                    transformer_sd = ckpt["transformer"]
+                    cm_sd = ckpt["condition_manager"]
+                unwrapped.transformer.load_state_dict(transformer_sd)
+                unwrapped.condition_manager.load_state_dict(cm_sd)
+                self.accelerator.print(f"Loaded weights from {resume_from} (weights only, starting from step 0)")
+            else:
+                self.accelerator.load_state(resume_from)
+                step_file = Path(resume_from) / "step.txt"
+                if step_file.exists():
+                    global_step = int(step_file.read_text().strip())
+                self.accelerator.print(f"Resumed training from step {global_step}")
 
         _first_step_logged = False
         _diag_done = False

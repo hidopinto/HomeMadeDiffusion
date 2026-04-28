@@ -62,7 +62,8 @@ training:
   eval_batch_size: 128      # Controls both generation and inline metric updates; 128 fits with FID+CLIP+training model on 24 GB
   eval_num_steps: 10       # FM quality sufficient at 10 steps for a training signal
   eval_prompts_file: "eval_prompts.txt"
-  resume_from_checkpoint: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints/full_ckpt"
+  resume_from_checkpoint: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints/full_ckpt/model.safetensors"
+  resume_weights_only: true
   inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
   inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
