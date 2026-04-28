@@ -41,11 +41,11 @@ dit:
   cross_attention: True
 
 training:
-  epochs: 30   # 583k / 300 = 1944 steps/epoch; 30 epochs ≈ 58k steps (PickaPic fine-tune)
-  lr: 1.0e-5
+  epochs: 3   # 3 × 36,567 = 109K total steps; same ~33M sample exposure as original 250K×128 plan
+  lr: 1.0e-4
   lr_scheduler: "cosine_with_warmup"  # or "constant"
-  warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
-  lr_end: 1.0e-7              # The floor of the cosine decay
+  warmup_ratio: 0.10                  # fraction of total optimizer steps for warmup (ignored by "constant")
+  lr_end: 1.0e-6              # The floor of the cosine decay
   weight_decay: 0.05
   mixed_precision: "bf16"   # Best for RTX 3090
   gradient_checkpointing: True
@@ -55,14 +55,14 @@ training:
   gradient_clip_norm: 1.0
   grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
   save_every_steps: 10000    # Save checkpoint every N optimizer steps
-  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/pickapic_checkpoints"
+  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints"
   eval_every_steps: 20000   # Run FID/IS/CLIP eval every N optimizer steps
 #  eval_every_steps: False   # Run FID/IS/CLIP eval every N optimizer steps
   eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
   eval_batch_size: 128      # Controls both generation and inline metric updates; 128 fits with FID+CLIP+training model on 24 GB
   eval_num_steps: 10       # FM quality sufficient at 10 steps for a training signal
   eval_prompts_file: "eval_prompts.txt"
-  resume_from_checkpoint: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints/full_ckpt"
+  resume_from_checkpoint: False  # set to "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints/full_ckpt" to resume
   inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled
   # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
   inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
@@ -77,10 +77,10 @@ general:
   wnb_entity: "hidopinto-1-weizmann-institute-of-science"
 
 data:
-  mode: "cache"   # "cache" | "streaming" | "cache_then_train" (VAE cache pass then train)
+  mode: "cache_then_train"   # "cache" | "streaming" | "cache_then_train" (VAE cache pass then train)
   vae_cache_dir: "/media/hido-pinto/מחסן/vae_cache"  # latents + captions stored here (~384 GB)
   steps_per_epoch: null       # auto-computed from len(dataloader); 10.97M samples / 300 = 36,567 steps
-  dataset_name: "pickapic-anonymous/pickapic_v1"  # 583k cached samples, per-file format
+  dataset_name: "pixparse/cc12m-wds"  # ~12M images, pre-hosted on HF Hub as WebDataset shards
   # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
   split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
   val_split: "train[99%:]"   # ~120k images used as FID reference (non-overlapping with train)
@@ -89,7 +89,6 @@ data:
   image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
   caption_key: "txt"     # scalar string in cc12m-wds
   cache_dir: "/media/hido-pinto/מחסן/cache"
-  filtered_indices_file: null  # set to prepare_cc12m.py output for Phase 2 filtered CC12M training
   encoding_batch_size: 900  # CLIP-only at train time (~0.5 MB/sample); serves ~3 training batches per call. Lower to 45 if re-caching VAE.
   num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
   dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)

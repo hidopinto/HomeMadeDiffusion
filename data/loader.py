@@ -233,6 +233,25 @@ def _build_cache_then_train_dataloader(
         )
         split = base_split
 
+    # Guard: if a per-file LatentDataset cache already exists for this dataset,
+    # cache_then_train would silently create a broken VaeCachingEngine shard cache
+    # in vae_cache_dir, shadowing the correct LatentDataset cache.
+    _pf_cache = Path(config.data.cache_dir) / config.data.dataset_name.replace("/", "--") / split
+    _pf_manifest = _pf_cache / "manifest.json"
+    if _pf_manifest.exists():
+        _is_latent_cache = False
+        try:
+            CacheManifest.load(_pf_manifest)
+            _is_latent_cache = True
+        except Exception:
+            pass
+        if _is_latent_cache:
+            raise ValueError(
+                f"[loader] Dataset '{config.data.dataset_name}' already has a per-file "
+                f"LatentDataset cache at '{_pf_cache}'.\n"
+                f"Set `data.mode: 'cache'` in config.yaml to use it."
+            )
+
     vae_cache_root = Path(config.data.vae_cache_dir)
     cache_dir = vae_cache_root / config.data.dataset_name.replace("/", "--") / split
     manifest_path = cache_dir / "manifest.json"
@@ -273,6 +292,7 @@ def _build_cache_then_train_dataloader(
         text_encoders={"text_embed": text_encoder},
         config=config,
         device=device,
+        filtered_indices_file=getattr(config.data, "filtered_indices_file", None),
     )
     # num_workers=0: CLIP runs on GPU and cannot cross subprocess fork boundaries
     dataloader = DataLoader(

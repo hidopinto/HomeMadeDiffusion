@@ -439,6 +439,7 @@ class VaeCachedDataset(IterableDataset):
         text_encoders: dict[str, TextEncoderProtocol],
         config,
         device: str,
+        filtered_indices_file: Path | str | None = None,
     ) -> None:
         self.cache_dir = Path(cache_dir)
         self.latent_dir = self.cache_dir / "latents"
@@ -456,6 +457,16 @@ class VaeCachedDataset(IterableDataset):
                 for line in f if line.strip()
                 for obj in (json.loads(line),)
             }
+
+        if filtered_indices_file is not None:
+            valid_ids = set(
+                int(line.strip())
+                for line in Path(filtered_indices_file).read_text().splitlines()
+                if line.strip()
+            )
+            self.captions = {k: v for k, v in self.captions.items() if k in valid_ids}
+            print(f"[VaeCachedDataset] Filtered to {len(self.captions):,} / {len(valid_ids):,} requested indices")
+
         self.num_samples = len(self.captions)
 
         # Precompute shard → sample-id mapping so __iter__ can shuffle at shard level
