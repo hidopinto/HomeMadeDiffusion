@@ -319,4 +319,48 @@ class DiTTrainer:
 
         # Always save final state so the last steps are never lost.
         self._save_checkpoint(checkpoint_dir, full_ckpt_dir, global_step)
+
+        # End-of-run eval and inference — mirrors the mid-training hooks but fires once at completion.
+        if eval_every_steps and self.eval_engine is not None:
+            self.accelerator.wait_for_everyone()
+            gc.collect()
+            torch.cuda.empty_cache()
+            unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
+            metrics = self.eval_engine.compute(unwrapped, global_step)
+            if metrics and self.accelerator.is_main_process:
+                self.accelerator.log(metrics, step=global_step)
+            torch.cuda.empty_cache()
+
+        if infer_every_steps:
+            unwrapped = cast(LatentDiffusion, self.accelerator.unwrap_model(self.model))
+            inference_prompt    = getattr(self.config.training, "inference_prompt")
+            sampler_cfg         = self.config.diffusion.samplers[self.config.diffusion.sampler]
+            inference_steps     = getattr(sampler_cfg, "num_steps", 50)
+            inference_eta       = getattr(sampler_cfg, "eta", 0.0)
+            guidance_scale      = getattr(self.config.training, "guidance_scale", 7.5)
+            inference_height    = getattr(self.config.training, "inference_height", 512)
+            inference_width     = getattr(self.config.training, "inference_width", 512)
+            inference_scheduler = getattr(self.config.diffusion, "sampler", "ddim")
+            unwrapped.transformer.eval()
+            images = unwrapped.generate(
+                [inference_prompt],
+                height=inference_height,
+                width=inference_width,
+                num_steps=inference_steps,
+                guidance_scale=guidance_scale,
+                scheduler=inference_scheduler,
+                eta=inference_eta,
+            )
+            img_tensor = images[0].detach().cpu().to(torch.float32)
+            self.accelerator.log(
+                {
+                    "inference/images": wandb.Image(
+                        img_tensor, caption=f"Final step {global_step}: {inference_prompt}"
+                    ),
+                    "inference/step": global_step,
+                },
+                step=global_step,
+            )
+            torch.cuda.empty_cache()
+
         self.accelerator.end_training()
