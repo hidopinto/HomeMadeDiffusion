@@ -62,6 +62,10 @@ def main() -> None:
     parser.add_argument("--out_dir", default=None,
                         help="Output directory for images and CSV "
                              "(default: <checkpoint_dir>/eval_sweep)")
+    parser.add_argument("--eval_batch_size", type=int, default=None,
+                        help="Images per generation batch during eval; overrides config if set")
+    parser.add_argument("--eval_num_steps", type=int, default=None,
+                        help="Diffusion steps for FID generation; overrides config if set")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -83,10 +87,16 @@ def main() -> None:
     logger.info("Building model on %s...", device)
     model = build_model(config, device, gradient_checkpointing=False, compile_blocks=False)
     model.cache_null_embed(torch.device(device))
+    model.vae.enable_slicing()
 
     # Build EvaluationEngine.
     # If the FID real-image stats cache already exists (written during training), the engine
     # loads it from disk and never touches val_dataloader — so we pass None in that case.
+    if args.eval_batch_size is not None:
+        config.training.eval_batch_size = args.eval_batch_size
+    if args.eval_num_steps is not None:
+        config.training.eval_num_steps = args.eval_num_steps
+
     eval_num_samples: int = getattr(config.training, "eval_num_samples", 2048)
     max_real = max(2048, min(eval_num_samples * 4, 10_000))
     fid_cache_path = _fid_stats_path(config, max_real)
