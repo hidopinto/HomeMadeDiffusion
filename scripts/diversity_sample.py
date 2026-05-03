@@ -156,6 +156,9 @@ def main() -> None:
                         help="Output path for balanced indices (one ID per line)")
     parser.add_argument("--plot", default=None,
                         help="Optional path for UMAP scatter plot PNG")
+    parser.add_argument("--plot-only", action="store_true",
+                        help="Skip sampling; load existing --out file and generate --plot only. "
+                             "Embeds --umap-subsample captions instead of the full set (~1-2 min).")
     parser.add_argument("--umap-subsample", type=int, default=100_000,
                         help="Max samples used for UMAP visualisation")
     parser.add_argument("--seed", type=int, default=42)
@@ -172,6 +175,36 @@ def main() -> None:
         filtered_ids = {int(l.strip()) for l in fpath.read_text().splitlines() if l.strip()}
         print(f"[diversity_sample] Loaded {len(filtered_ids):,} filtered indices")
 
+    # ── Fast plot-only path ──────────────────────────────────────────────────
+    if args.plot_only:
+        if not args.plot:
+            print("[diversity_sample] --plot-only requires --plot <path>", file=sys.stderr)
+            sys.exit(1)
+        import numpy as np
+
+        captions = _load_captions(captions_path, filtered_ids)
+        all_ids = sorted(captions.keys())
+        print(f"[diversity_sample] plot-only: {len(all_ids):,} IDs available")
+
+        kept_set: set[int] = set()
+        if args.out and Path(args.out).exists():
+            kept_set = {int(l.strip()) for l in Path(args.out).read_text().splitlines() if l.strip()}
+            print(f"[diversity_sample] Loaded {len(kept_set):,} kept indices from {args.out}")
+
+        # Subsample for UMAP — embed only this many captions instead of the full set
+        rng = np.random.default_rng(args.seed)
+        n = min(args.umap_subsample, len(all_ids))
+        sub_ids = [all_ids[i] for i in rng.choice(len(all_ids), n, replace=False)]
+        sub_texts = [captions[i] for i in sub_ids]
+
+        print(f"[diversity_sample] Embedding {n:,} captions for UMAP ...")
+        sub_emb = _embed(sub_texts, args.model, args.embed_batch_size)
+        sub_labels = _cluster(sub_emb, min(args.k_clusters, n // 10), args.seed)
+        _umap_plot(sub_emb, sub_labels, kept_set, sub_ids, Path(args.plot),
+                   n, args.seed)
+        return
+
+    # ── Full sampling path ───────────────────────────────────────────────────
     captions = _load_captions(captions_path, filtered_ids)
     print(f"[diversity_sample] {len(captions):,} captions loaded")
 
