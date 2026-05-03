@@ -1,0 +1,105 @@
+external_models:
+  vae: "madebyollin/sdxl-vae-fp16-fix"
+  tokenizer: "openai/clip-vit-large-patch14"
+  text_encoder: "openai/clip-vit-large-patch14"
+
+diffusion:
+  method: "flow_matching"         # active training method: "ddpm" | "flow_matching"
+  sampler: "flow_matching"        # active sampler: "ddim" | "ddpm" | "flow_matching"
+  methods:
+    ddpm:
+      num_timesteps: 1000
+      beta_start: 0.0001
+      beta_end: 0.02
+      learn_variance: True    # Improved DDPM: predict variance alongside noise
+    flow_matching:
+      num_timesteps: 1000
+      use_minibatch_ot: True  # set True to enable minibatch OT noise reordering
+      time_sampling: "logit_normal"  # "uniform" | "logit_normal" (SD3/Flux style)
+      logit_normal_mean: 0.0         # mean of N before sigmoid; 0 = centred at t=0.5
+      logit_normal_std: 1.0          # spread; lower = tighter midpoint cluster
+  samplers:
+    ddim:
+      num_steps: 50
+      eta: 0.0                # stochasticity; 0 = deterministic, 1 = DDPM
+    ddpm: {}                  # always runs full schedule; no config needed
+    flow_matching:
+      num_steps: 50           # no eta — FM is always deterministic
+
+dit:
+  input_size: 64
+  patch_size: [4, 4]        # (t, h, w) for video, (h, w) for image
+  in_channels: 4            # Standard SDXL Latent channels
+  hidden_size: 1024         # Reduced for faster training on 3090
+  cond_dim: 768             # Matches CLIP ViT-L/14
+  frequency_embedding_size: 256
+  max_period: 10000
+  max_frames: 512           # Video only
+  depth: 28                 # Reduced from 28 for "simple" version
+  num_heads: 16             # hidden_size / 64
+  vae_scale_factor: 0.18215 # SDXL Standard
+  cross_attention: True
+
+training:
+  epochs: 30   # 583k / 300 = 1944 steps/epoch; 30 epochs ≈ 58k steps (PickaPic fine-tune)
+  lr: 1.0e-5
+  lr_scheduler: "cosine_with_warmup"  # or "constant"
+  warmup_ratio: 0.05                  # fraction of total optimizer steps for warmup (ignored by "constant")
+  lr_end: 1.0e-7              # The floor of the cosine decay
+  weight_decay: 0.05
+  mixed_precision: "bf16"   # Best for RTX 3090
+  gradient_checkpointing: True
+  use_reentrant: False
+  batch_size: 300            # 2.34x from 128; VRAM TBD — fall back to 192 if OOM
+  gradient_accumulation_steps: 1
+  gradient_clip_norm: 1.0
+  grad_norm_log_every_steps: 100   # log per-block grad norms and bar chart every N steps
+  save_every_steps: 10000    # Save checkpoint every N optimizer steps
+  checkpoint_dir: "/media/hido-pinto/מחסן/checkpoints/pickapic_checkpoints"
+  eval_every_steps: 20000   # Run FID/IS/CLIP eval every N optimizer steps
+#  eval_every_steps: False   # Run FID/IS/CLIP eval every N optimizer steps
+  eval_num_samples: 2048   # Generated images per eval (min 2048 for reliable FID)
+  eval_batch_size: 128      # Controls both generation and inline metric updates; 128 fits with FID+CLIP+training model on 24 GB
+  eval_num_steps: 10       # FM quality sufficient at 10 steps for a training signal
+  eval_prompts_file: "eval_prompts.txt"
+  resume_from_checkpoint: "/media/hido-pinto/מחסן/checkpoints/cc12m_checkpoints/full_ckpt/model.safetensors"
+  resume_weights_only: true
+  inference_every_steps: 5000  # Run inference every N optimizer steps; False = disabled
+  # inference_prompt: "A runner wearing a green shirt, with a beautiful mountains view."
+  inference_prompt: "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit."
+  inference_height: 512    # must match data.image_size
+  inference_width: 512     # must match data.image_size
+  guidance_scale: 6.5      # CFG scale used during in-training inference (6.5 safer with 20% CFG dropout)
+  cfg_dropout_prob: 0.2   # Fraction of samples trained without text conditioning (for CFG)
+
+general:
+  is_video: False           # Explicitly set for conditional logic
+  wnb_project_name: "Home-Made-Diffusion"
+  wnb_entity: "hidopinto-1-weizmann-institute-of-science"
+
+data:
+  mode: "cache"   # "cache" | "streaming" | "cache_then_train" (VAE cache pass then train)
+  vae_cache_dir: "/media/hido-pinto/מחסן/vae_cache"  # latents + captions stored here (~384 GB)
+  steps_per_epoch: null       # auto-computed from len(dataloader); 10.97M samples / 300 = 36,567 steps
+  dataset_name: "pickapic-anonymous/pickapic_v1"  # 583k cached samples, per-file format
+  # local_data_dir: null               # set to load from local Parquet files; unset to fetch from Hub
+  split: "train"             # full dataset in streaming mode; was "train[:5%]" for cache mode
+  val_split: "train[99%:]"   # ~120k images used as FID reference (non-overlapping with train)
+  val_streaming_samples: 2048  # streaming fallback: .take(N) when percent slices unsupported
+  image_size: 512   # constraint: image_size / 8 == dit.input_size (512 / 8 = 64 ✓)
+  image_key: "jpg"       # JPEG bytes in cc12m-wds; converted to PIL in encoding.py
+  caption_key: "txt"     # scalar string in cc12m-wds
+  cache_dir: "/media/hido-pinto/מחסן/cache"
+  filtered_indices_file: null  # set to prepare_cc12m.py output for Phase 2 filtered CC12M training
+  eval_dataset_name: "pixparse/cc12m-wds"  # dataset for FID real-image stats (CC12M forgetting monitor)
+  encoding_batch_size: 900  # CLIP-only at train time (~0.5 MB/sample); serves ~3 training batches per call. Lower to 45 if re-caching VAE.
+  num_workers: 8             # used only in cache mode; streaming mode forces num_workers=0
+  dataset_num_proc: 4        # parallel workers for load_dataset() download (cache mode only)
+  dataset_max_retries: 5     # outer retry attempts on network failure (cache mode only)
+  latent_shard_size: 1000    # latents per shard file (must match migration script SHARD_SIZE)
+
+inference:
+  out_dir: "/media/hido-pinto/מחסן/outputs"
+
+evaluation:
+  clip_model_name: "openai/clip-vit-large-patch14"
