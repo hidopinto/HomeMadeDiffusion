@@ -75,6 +75,19 @@ PORTFOLIO_PROMPTS: list[str] = [
     "A slice of pepperoni pizza on a plate",
 ]
 
+CURATED_PORTFOLIO_PROMPTS = [
+     "A professional cinematic photo of a solitary astronaut walking on a white salt flat, clear blue sky, highly detailed suit.",
+     "An oil painting of a stormy sea with dramatic waves",
+     "A cherry blossom tree in full bloom",
+     "A sunflower field under a blue sky",
+     "A narrow cobblestone street in an old European town",
+     "A golden retriever dog sitting on grass",
+     "A sandy beach with turquoise ocean water and palm trees",
+     "A mountain lake reflecting the surrounding peaks at sunset",
+     "An astronaut in a white spacesuit walking on a salt flat",
+     "A tall green cactus in a sandy desert",
+ ]
+
 
 def _ckpt_label(path: Path) -> str:
     m = re.search(r"step(\d+)", path.stem)
@@ -165,7 +178,7 @@ def main() -> None:
     # scores[prompt_slug][ckpt_label] = [score_per_image, ...]
     scores: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
 
-    total = len(ckpt_paths) * len(PORTFOLIO_PROMPTS)
+    total = len(ckpt_paths) * len(CURATED_PORTFOLIO_PROMPTS)
     done = 0
 
     for ckpt_path, label in zip(ckpt_paths, labels):
@@ -173,7 +186,7 @@ def main() -> None:
         _load_checkpoint(model, ckpt_path, device)
         model.transformer.eval()
 
-        for prompt in PORTFOLIO_PROMPTS:
+        for prompt in CURATED_PORTFOLIO_PROMPTS:
             slug = _prompt_slug(prompt)
             prompt_dir = out_dir / slug
             prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -215,7 +228,7 @@ def main() -> None:
     header = f"{'Prompt':<{header_w}}" + "".join(f"{lbl:>{col_w}}" for lbl in labels)
     print(header)
     print("-" * len(header))
-    for prompt in PORTFOLIO_PROMPTS:
+    for prompt in CURATED_PORTFOLIO_PROMPTS:
         slug = _prompt_slug(prompt)
         row = f"{prompt[:header_w - 1]:<{header_w}}"
         for label in labels:
@@ -237,7 +250,7 @@ def main() -> None:
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["prompt", "checkpoint", "image_idx", "clip_score"])
-        for prompt in PORTFOLIO_PROMPTS:
+        for prompt in CURATED_PORTFOLIO_PROMPTS:
             slug = _prompt_slug(prompt)
             for label in labels:
                 for i, sc in enumerate(scores[slug].get(label, [])):
