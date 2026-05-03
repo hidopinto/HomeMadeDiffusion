@@ -131,11 +131,29 @@ pytest tests/ -v
 
 ## Future Work
 
-**T5-XL encoder upgrade** — The complete implementation plan exists, all data preparation is done, and the architecture decisions are finalised. Deferred after the portfolio evaluation showed step-50k is already portfolio-ready for the targeted prompt categories.
+**T5-XL encoder upgrade** — The complete implementation plan exists, all data preparation is done, and the architecture decisions are finalized. Deferred after the portfolio evaluation showed step-50k is already portfolio-ready for the targeted prompt categories.
 
 Key planned changes:
 - Replace CLIP ViT-L/14 with `google/t5-v1_1-xl` as the text encoder (`cond_dim: 768 → 2048`)
 - Pre-cache T5 sequence embeddings for 583k PickaPic + 392k CC12M samples (~500 GB)
 - Mixed training: 60% PickaPic + 40% diversity-sampled CC12M via `ConcatDataset`
-- Resume from step-50k checkpoint with projectors re-initialised (transformer trunk kept frozen for warm-up)
+- Resume from step-50k checkpoint with projectors re-initialized (transformer trunk kept frozen for warm-up)
 - Expected improvement: attribute binding on complex multi-element prompts (ramen bowl, pencil sketch portrait) where CLIP's 77-token pooled representation fails
+
+**Video generation** — The spatial/temporal architecture is already in place. `SinCosPosEmbed3D` implements separable temporal + spatial positional embeddings, `PatchEmbed` handles 5D tensors `(B, C, F, H, W)`, and `FinalLayer` correctly unpacks video latents. Toggling `general.is_video: true` in `config.yaml` activates the 3D path end-to-end through training and the sampler. What still needs to be built before a training run:
+
+- **Video dataset loader** — frame-level sampling from a video source, variable-length padding, and temporal augmentation
+- **Per-frame VAE encoding** — `encode_batch()` currently handles 2D only; needs 5D support with per-frame SDXL VAE calls
+- **Config additions** — `data.video_frames`, `data.frame_stride`, temporal crop settings
+- **Inference endpoint** — frame unpacking and video export after sampling
+
+**Recommended datasets for video fine-tuning** (open, diverse, caption-quality prioritized):
+
+| Dataset | Size | Why it fits |
+|---------|------|-------------|
+| [WebVid-10M](https://m-bain.github.io/webvid-dataset/) | ~10M clips, ~52k hrs | Large-scale, diverse, paired alt-text captions; standard video diffusion benchmark |
+| [HD-VILA-100M](https://github.com/microsoft/HD-VilA) | 100M clip-caption pairs | High-resolution clips sourced from YouTube; rich diversity across domains |
+| [InternVid](https://github.com/OpenGVLab/InternVideo/tree/main/Data/InternVid) | 234M clips (7.1B frames) | Curated with ViCLIP scores; dense temporal diversity |
+| [OpenVid-1M](https://github.com/NJU-PCALab/OpenVid-1M) | 1M clips, high-quality | Filtered for aesthetic quality + motion quality; strong baseline for 24GB VRAM constraints |
+
+For an RTX 3090, **OpenVid-1M** is the most practical starting point — it is pre-filtered for quality and small enough to cache latents without running out of disk. WebVid-10M is the next step up once the pipeline is validated.
